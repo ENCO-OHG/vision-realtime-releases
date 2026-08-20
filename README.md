@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/vision-realtime-icon.png" alt="Vision Realtime" width="96" height="96">
+</p>
+
 # Vision Realtime Releases
 
 This repository provides the official public Windows release downloads for Vision Realtime, a software product by EN-CO OHG.
