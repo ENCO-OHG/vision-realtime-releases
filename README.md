@@ -22,6 +22,8 @@ Prerelease versions, including alpha, beta, and release-candidate builds, are pr
 
 Vision Realtime is distributed under the GNU General Public License version 3. Each binary release in this repository must be accompanied by the corresponding source archive required by the GPLv3 license terms.
 
+For GPLv3 source, use the release asset named `vision-realtime-<version>-corresponding-source.zip`. GitHub's automatically generated "Source code" archives for this repository only contain this release landing page and are not the corresponding source for the Vision Realtime binaries.
+
 Third-party components included in release packages remain subject to their own license terms and notices.
 
 ## Security
