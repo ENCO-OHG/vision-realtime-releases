@@ -1,0 +1,8 @@
+{
+  "listenAddress": "127.0.0.1",
+  "port": 24104,
+  "authToken": "",
+  "logLevel": "info",
+  "logDir": "logs",
+  "stateFile": "vision-realtime-state.json"
+}

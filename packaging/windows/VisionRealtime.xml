@@ -1,0 +1,24 @@
+<service>
+  <id>VisionRealtime</id>
+  <name>Vision Realtime</name>
+  <description>EN-CO OHG Vision Realtime IEC 60870-5-104 service</description>
+  <executable>%BASE%\bin\vision-realtime.exe</executable>
+  <arguments>run --config "%ProgramData%\EN-CO OHG\Vision Realtime\config\gateway.json" --log-dir "%ProgramData%\EN-CO OHG\Vision Realtime\logs" --no-color</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+  </serviceaccount>
+  <stoptimeout>30 sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <logpath>%ProgramData%\EN-CO OHG\Vision Realtime\logs\service</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

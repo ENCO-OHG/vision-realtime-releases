@@ -10,10 +10,10 @@ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 The complete GNU General Public License version 3 is included in
-licenses/GPL-3.0.txt.
+GPL-3.0.txt.
 
 Binary releases must be accompanied by the corresponding source archive and
 the complete GPLv3 license text. WinSW is distributed separately under the MIT
-License; see licenses/WinSW-LICENSE.txt. The versioned corresponding-source
-archive distributed beside each binary package contains the source needed to
-build this gateway, including the exact lib60870-C source used for that build.
+License; see WinSW-LICENSE.txt. The versioned corresponding-source archive
+distributed beside each binary package contains the source needed to build
+this gateway, including the exact lib60870-C source used for that build.

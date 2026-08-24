@@ -1,0 +1,37 @@
+VISION REALTIME - WINDOWS QUICK START
+
+Service name: VisionRealtime
+Install folder: C:\Program Files\EN-CO OHG\Vision Realtime
+Configuration: C:\ProgramData\EN-CO OHG\Vision Realtime\config\gateway.json
+State: C:\ProgramData\EN-CO OHG\Vision Realtime\state\vision-realtime-state.json
+Logs: C:\ProgramData\EN-CO OHG\Vision Realtime\logs
+
+On first installation the setup displays the generated authentication token once.
+Copy it into the Vision One IEC104 device settings. Upgrades keep the existing
+token and do not display it again. Silent installs never display secrets.
+
+Edit gateway.json as an administrator, then restart the service:
+  sc.exe stop VisionRealtime
+  sc.exe start VisionRealtime
+
+An upgrade preserves configuration, state, and logs. Normal uninstall also
+preserves ProgramData. Select the purge option in the uninstaller, or run
+the uninstaller with /S /PURGE, to delete all Vision Realtime ProgramData.
+
+The service ZIP is intended for controlled manual deployment. Copy its
+contents to a protected Program Files folder, create the ProgramData folders,
+then generate a unique token and configuration from an elevated PowerShell:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File initialize-config.ps1 -TemplatePath defaults\gateway.json -ConfigPath "C:\ProgramData\EN-CO OHG\Vision Realtime\config\gateway.json"
+
+The manual command does not print the token. An administrator can read the
+generated authToken from the protected gateway.json and enter it in Vision One.
+
+Never copy defaults\gateway.json directly: its token placeholder is public and
+the service rejects it at startup. Restrict the ProgramData tree to
+Administrators, SYSTEM, and LocalService before starting the service. Then run:
+  VisionRealtime.exe install
+  VisionRealtime.exe start
+
+To deregister a manually deployed service:
+  VisionRealtime.exe stop
+  VisionRealtime.exe uninstall

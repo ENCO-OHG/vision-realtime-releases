@@ -1,0 +1,12 @@
+*~
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+/build/
+/native/build*/
+/packaging/build/
+/packaging/dist/

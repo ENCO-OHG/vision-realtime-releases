@@ -1,0 +1,11 @@
+{
+  "name": "vision-realtime",
+  "private": true,
+  "version": "1.0.0-beta.2",
+  "description": "Vision Realtime IEC 60870-5-104 gateway service",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "build:mock": "cmake -S native -B build/vision-realtime-mock && cmake --build build/vision-realtime-mock --config Release",
+    "test:mock": "ctest --test-dir build/vision-realtime-mock -C Release --output-on-failure"
+  }
+}

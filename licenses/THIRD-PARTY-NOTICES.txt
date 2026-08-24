@@ -1,0 +1,16 @@
+THIRD-PARTY NOTICES
+
+Vision Realtime is a product of EN-CO OHG.
+
+Windows Service Wrapper (WinSW) 2.12.0
+Copyright (c) 2008-2020 Kohsuke Kawaguchi, Sun Microsystems, Inc., CloudBees, Inc., Oleg Nenashev and other contributors
+Licensed under the MIT License. See WinSW-LICENSE.txt.
+Project: https://github.com/winsw/winsw
+
+lib60870-C
+Copyright MZ Automation GmbH
+This package uses the public lib60870-C source under GNU GPL version 3; see
+GPL-3.0.txt for the complete license text.
+The corresponding source archive distributed with the package contains the
+exact lib60870-C source used for the build.
+Project: https://github.com/mz-automation/lib60870

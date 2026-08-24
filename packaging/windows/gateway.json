@@ -1,0 +1,8 @@
+{
+  "listenAddress": "127.0.0.1",
+  "port": 24104,
+  "authToken": "__GENERATE_SECURE_TOKEN__",
+  "logLevel": "info",
+  "logDir": "C:\\ProgramData\\EN-CO OHG\\Vision Realtime\\logs",
+  "stateFile": "C:\\ProgramData\\EN-CO OHG\\Vision Realtime\\state\\vision-realtime-state.json"
+}

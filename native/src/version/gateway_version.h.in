@@ -1,0 +1,4 @@
+#pragma once
+
+inline constexpr const char* VISION_REALTIME_VERSION = "@VISION_REALTIME_FULL_VERSION@";
+inline constexpr const char* VISION_ONE_IEC104_GATEWAY_VERSION = VISION_REALTIME_VERSION;
