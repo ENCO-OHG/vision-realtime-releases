@@ -8,14 +8,13 @@ Publish these assets together from the same build:
 
 - `vision-realtime-<version>-windows-x64-setup.exe`
 - `vision-realtime-<version>-windows-x64-service.zip`
-- `vision-realtime-<version>-corresponding-source.zip`
 - `SHA256SUMS.txt`
 
-The `corresponding-source.zip` is the GPLv3 corresponding source for the binary release. GitHub's automatically generated source archives from the public release repository are not corresponding source for Vision Realtime binaries.
+The release tag in the public `vision-realtime-releases` repository must point to the exact source used for the binary release. GitHub's automatically attached `Source code (zip)` and `Source code (tar.gz)` archives are generated from that tag.
 
 ## Source Archive Contents
 
-Before publishing a binary release, verify that `vision-realtime-<version>-corresponding-source.zip` contains:
+Before publishing a binary release, verify that the public release tag contains:
 
 - Vision Realtime native source under `native/`
 - build and packaging scripts under `scripts/` and `packaging/`
@@ -31,7 +30,7 @@ Do not include CI tokens, signing keys, private credentials, customer configurat
 
 ## Publication Rule
 
-Do not publish or distribute the installer or service ZIP unless the matching corresponding-source archive is available from the same release page at the same time.
+Do not publish or distribute the installer or service ZIP unless the matching public source tag is available from the same release page at the same time.
 
 ## Alternative Licensing
 

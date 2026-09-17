@@ -55,21 +55,13 @@ std::unique_ptr<Iec104Backend> g_backend;
 std::unique_ptr<StateStore> g_stateStore;
 std::mutex g_logMutex;
 std::mutex g_clientsMutex;
+std::mutex g_desiredStateMutex;
 std::vector<std::thread> g_clientThreads;
-std::mutex g_deviceLifecycleMutex;
-std::map<std::string, std::shared_ptr<std::mutex>> g_deviceLifecycleLocks;
 
 constexpr std::uintmax_t LOG_MAX_BYTES = 1024 * 1024;
 constexpr int LOG_MAX_FILES = 5;
 constexpr const char* LOG_FILE_NAME = "vision-realtime.log";
 constexpr int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
-
-std::shared_ptr<std::mutex> deviceLifecycleLock(const std::string& deviceId) {
-    std::lock_guard<std::mutex> lock(g_deviceLifecycleMutex);
-    auto& result = g_deviceLifecycleLocks[deviceId];
-    if (!result) result = std::make_shared<std::mutex>();
-    return result;
-}
 
 enum class CliCommand {
     Run,
@@ -86,7 +78,6 @@ struct CliOptions {
     std::string configPath;
     std::optional<std::string> listenAddress;
     std::optional<int> port;
-    std::optional<std::string> authToken;
     std::optional<std::string> logLevel;
     std::optional<std::string> logDir;
     std::optional<std::string> stateFile;
@@ -302,10 +293,25 @@ std::string httpResponse(int status, const std::string& body) {
     return out.str();
 }
 
-bool isAuthorized(const HttpRequest& req) {
-    if (g_config.authToken.empty()) return true;
+const GatewayConfig::Credential* credentialFor(const HttpRequest& req) {
     auto it = req.headers.find("authorization");
-    return it != req.headers.end() && it->second == "Bearer " + g_config.authToken;
+    if (it == req.headers.end() || it->second.rfind("Bearer ", 0) != 0) return nullptr;
+    const std::string token = it->second.substr(7);
+    if (token == g_config.controller.token) return &g_config.controller;
+    for (const auto& credential : g_config.operators) if (token == credential.token) return &credential;
+    return nullptr;
+}
+
+std::string eventDeviceId(const std::string& path) {
+    const auto queryStart = path.find('?');
+    if (queryStart == std::string::npos) return "";
+    std::istringstream query(path.substr(queryStart + 1));
+    std::string entry;
+    while (std::getline(query, entry, '&')) {
+        const auto separator = entry.find('=');
+        if (separator != std::string::npos && entry.substr(0, separator) == "deviceId") return entry.substr(separator + 1);
+    }
+    return "";
 }
 
 std::optional<HttpRequest> readRequest(socket_t socket) {
@@ -360,7 +366,8 @@ std::optional<HttpRequest> readRequest(socket_t socket) {
 }
 
 bool handleWebSocket(socket_t socket, const HttpRequest& req) {
-    if (req.path.rfind("/api/v1/events", 0) != 0 || !isAuthorized(req)) return false;
+    const GatewayConfig::Credential* credential = credentialFor(req);
+    if (req.path.rfind("/api/v1/events", 0) != 0 || !credential) return false;
     auto keyIt = req.headers.find("sec-websocket-key");
     if (keyIt == req.headers.end()) return false;
     std::ostringstream response;
@@ -370,8 +377,15 @@ bool handleWebSocket(socket_t socket, const HttpRequest& req) {
              << "Sec-WebSocket-Accept: " << websocketAccept(keyIt->second) << "\r\n\r\n";
     if (!sendAll(socket, response.str())) return false;
 
-    g_broadcaster.addClient(socket);
     g_broadcaster.sendText(socket, std::string("{\"type\":\"gateway\",\"ok\":true,\"version\":\"") + jsonEscape(VISION_ONE_IEC104_GATEWAY_VERSION) + "\"}");
+    const std::string deviceId = eventDeviceId(req.path);
+    for (const auto& event : g_devices.cachedValueEvents(deviceId)) {
+        if (!g_broadcaster.sendText(socket, event)) {
+            closeSocket(socket);
+            return true;
+        }
+    }
+    g_broadcaster.addClient(socket);
 
     std::array<char, 2> frameHeader{};
     while (g_running) {
@@ -406,45 +420,54 @@ std::string handleApi(const HttpRequest& req) {
 #else
             "mock"
 #endif
-            "\"}");
+            "\",\"capabilities\":{\"desiredState\":{\"version\":" + std::to_string(VISION_REALTIME_DESIRED_STATE_VERSION) + ",\"route\":\"PUT /api/v1/desired-state\",\"revisioned\":true,\"sha256\":true,\"fullReplacement\":true},\"authentication\":{\"controller\":true,\"operators\":{\"events\":true,\"dataPlane\":true}}}}");
     }
-    if (!isAuthorized(req)) return httpResponse(401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+    const GatewayConfig::Credential* credential = credentialFor(req);
+    if (!credential) return httpResponse(401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+
+    if (req.method == "PUT" && req.path == "/api/v1/desired-state") {
+        if (credential->id != g_config.controller.id) return httpResponse(401, "{\"ok\":false,\"error\":\"controller-credential-required\"}");
+        DesiredState desired;
+        try {
+            desired = parseDesiredState(parseJson(req.body));
+        } catch (const std::exception& e) {
+            return httpResponse(400, "{\"ok\":false,\"error\":\"invalid-desired-state\",\"message\":\"" + jsonEscape(e.what()) + "\"}");
+        }
+        if (desired.gatewayTargetId != g_config.gatewayTargetId || desired.controllerId != g_config.controllerId || desired.controllerGeneration != g_config.controllerGeneration) {
+            return httpResponse(409, "{\"ok\":false,\"error\":\"controller-identity-mismatch\"}");
+        }
+        std::lock_guard<std::mutex> desiredStateLock(g_desiredStateMutex);
+        const auto previous = g_stateStore->devices();
+        bool committed = false;
+        try {
+            committed = g_stateStore->replace(desired);
+        } catch (const std::exception& e) {
+            return httpResponse(409, "{\"ok\":false,\"error\":\"revision-conflict\",\"message\":\"" + jsonEscape(e.what()) + "\"}");
+        }
+        if (!committed) {
+            return httpResponse(200, "{\"ok\":true,\"committed\":false,\"converged\":true,\"revision\":" + std::to_string(desired.revision) + ",\"hash\":\"" + desired.hash + "\",\"requestId\":\"" + jsonEscape(desired.requestId) + "\"}");
+        }
+        for (const auto& device : previous) {
+            if (std::none_of(desired.devices.begin(), desired.devices.end(), [&](const auto& next) { return next.deviceId == device.deviceId; })) broadcastResultEvents(g_backend->remove(device.deviceId));
+        }
+        for (const auto& device : desired.devices) {
+            auto configured = g_backend->configure(device.deviceId, device.tags, device.connection);
+            broadcastResultEvents(configured);
+            auto running = device.desiredState == "running" ? g_backend->start(device.deviceId) : g_backend->stop(device.deviceId);
+            broadcastResultEvents(running);
+            if (configured.status < 200 || configured.status >= 300 || running.status < 200 || running.status >= 300) {
+                return httpResponse(500, "{\"ok\":false,\"error\":\"desired-state-apply-failed\",\"revision\":" + std::to_string(desired.revision) + "}");
+            }
+        }
+        return httpResponse(200, "{\"ok\":true,\"committed\":" + boolJson(committed) + ",\"converged\":true,\"revision\":" + std::to_string(desired.revision) + ",\"hash\":\"" + desired.hash + "\",\"requestId\":\"" + jsonEscape(desired.requestId) + "\"}");
+    }
 
     std::smatch match;
-    if (!std::regex_match(req.path, match, std::regex("^/api/v1/devices/([^/]+)/?(config|start|stop|status|write|interrogate)$"))) {
+    if (!std::regex_match(req.path, match, std::regex("^/api/v1/devices/([^/]+)/?(status|write|interrogate)$"))) {
         return httpResponse(404, "{\"ok\":false,\"error\":\"not-found\"}");
     }
     std::string deviceId = match[1].str();
     std::string action = match[2].str();
-
-    if (action == "config" && req.method == "POST") {
-        std::lock_guard<std::mutex> lifecycleLock(*deviceLifecycleLock(deviceId));
-        const JsonValue body = parseJson(req.body);
-        if (!body.object()) return httpResponse(400, "{\"ok\":false,\"error\":\"invalid-config-body\"}");
-        auto tags = parseTags(body);
-        auto connection = parseConnection(body);
-        if (const auto error = validateConnectionConfig(connection)) return httpResponse(400, "{\"ok\":false,\"error\":\"" + jsonEscape(*error) + "\"}");
-        g_stateStore->updateConfig(deviceId, tags, connection);
-        auto result = g_backend->configure(deviceId, tags, connection);
-        broadcastResultEvents(result);
-        return httpResponse(result.status, result.body);
-    }
-
-    if (action == "start" && req.method == "POST") {
-        std::lock_guard<std::mutex> lifecycleLock(*deviceLifecycleLock(deviceId));
-        g_stateStore->updateDesiredRunning(deviceId, true);
-        auto result = g_backend->start(deviceId);
-        broadcastResultEvents(result);
-        return httpResponse(result.status, result.body);
-    }
-
-    if (action == "stop" && req.method == "POST") {
-        std::lock_guard<std::mutex> lifecycleLock(*deviceLifecycleLock(deviceId));
-        g_stateStore->updateDesiredRunning(deviceId, false);
-        auto result = g_backend->stop(deviceId);
-        broadcastResultEvents(result);
-        return httpResponse(result.status, result.body);
-    }
 
     if (action == "status" && req.method == "GET") {
         auto result = g_backend->status(deviceId);
@@ -548,7 +571,7 @@ void restorePersistedDevices() {
         if (configured.status < 200 || configured.status >= 300) {
             throw std::runtime_error("cannot restore device '" + device.deviceId + "': " + configured.body);
         }
-        if (device.desiredRunning) {
+        if (device.desiredState == "running") {
             auto started = g_backend->start(device.deviceId);
             if (started.status < 200 || started.status >= 300) {
                 throw std::runtime_error("cannot start restored device '" + device.deviceId + "': " + started.body);
@@ -575,6 +598,7 @@ void applyConfigFile(GatewayConfig& config, const std::string& path) {
         throw std::runtime_error("invalid config file '" + path + "': " + e.what());
     }
     if (!root.object()) throw std::runtime_error("invalid config file '" + path + "': root must be an object");
+    if (root.find("authToken")) throw std::runtime_error("invalid config file '" + path + "': authToken is not supported; configure credentials.controller and credentials.operators");
     auto stringSetting = [&](const char* key, std::string& target) {
         const JsonValue* value = root.find(key);
         if (!value) return;
@@ -582,10 +606,36 @@ void applyConfigFile(GatewayConfig& config, const std::string& path) {
         target = *value->string();
     };
     stringSetting("listenAddress", config.listenAddress);
-    stringSetting("authToken", config.authToken);
     stringSetting("logLevel", config.logLevel);
     stringSetting("logDir", config.logDir);
     stringSetting("stateFile", config.stateFile);
+    if (const JsonValue* credentials = root.find("credentials")) {
+        if (!credentials->object()) throw std::runtime_error("invalid config file '" + path + "': credentials must be an object");
+        const JsonValue* controller = credentials->find("controller");
+        const JsonValue* operators = credentials->find("operators");
+        if (!controller || !controller->object() || !operators || !operators->array()) throw std::runtime_error("invalid config file '" + path + "': credentials must contain controller and operators");
+        auto credential = [&](const JsonValue& value, bool controllerCredential, std::size_t operatorIndex = 0) {
+            GatewayConfig::Credential result;
+            const auto* id = value.find("id"); const auto* token = value.find("token");
+            if (!value.object() || !token || !token->string() || token->string()->empty() || (controllerCredential && (!id || !id->string() || id->string()->empty()))) throw std::runtime_error("invalid config file '" + path + "': controller id and all credential tokens must be non-empty strings");
+            result.id = id && id->string() && !id->string()->empty() ? *id->string() : "operator-" + std::to_string(operatorIndex + 1);
+            result.token = *token->string();
+            return result;
+        };
+        config.controller = credential(*controller, true);
+        const auto stringControllerSetting = [&](const char* key, std::string& target) {
+            const auto* value = controller->find(key);
+            if (!value || !value->string() || value->string()->empty()) throw std::runtime_error("invalid config file '" + path + "': controller " + key + " must be a non-empty string");
+            target = *value->string();
+        };
+        stringControllerSetting("gatewayTargetId", config.gatewayTargetId);
+        stringControllerSetting("controllerId", config.controllerId);
+        const auto* generation = controller->find("controllerGeneration");
+        if (!generation || !generation->number() || std::floor(*generation->number()) != *generation->number() || *generation->number() < 0 || *generation->number() > 9007199254740991.0) throw std::runtime_error("invalid config file '" + path + "': controllerGeneration must be a non-negative safe integer");
+        config.controllerGeneration = static_cast<std::uint64_t>(*generation->number());
+        config.operators.clear();
+        for (std::size_t i = 0; i < operators->array()->size(); ++i) config.operators.push_back(credential((*operators->array())[i], false, i));
+    }
     if (const JsonValue* port = root.find("port")) {
         if (!port->number() || std::floor(*port->number()) != *port->number() || *port->number() < 1 || *port->number() > 65535) throw std::runtime_error("invalid config file '" + path + "': port must be an integer between 1 and 65535");
         config.port = static_cast<int>(*port->number());
@@ -595,7 +645,15 @@ void applyConfigFile(GatewayConfig& config, const std::string& path) {
 void validateConfig(const GatewayConfig& config) {
     if (config.listenAddress.empty()) throw std::runtime_error("listenAddress must not be empty");
     if (config.port < 1 || config.port > 65535) throw std::runtime_error("port must be between 1 and 65535");
-    if (config.authToken == "__GENERATE_SECURE_TOKEN__") throw std::runtime_error("authToken placeholder must be replaced with a secure token");
+    if (config.controller.id.empty() || config.controller.token.empty()) throw std::runtime_error("credentials.controller id and token must be configured");
+    if (config.gatewayTargetId.empty() || config.controllerId.empty()) throw std::runtime_error("controller gatewayTargetId and controllerId must be configured");
+    for (std::size_t i = 0; i < config.operators.size(); ++i) {
+        const auto& credential = config.operators[i];
+        if (credential.id == config.controller.id || credential.token == config.controller.token) throw std::runtime_error("credential IDs and tokens must be unique");
+        for (std::size_t j = 0; j < i; ++j) {
+            if (credential.id == config.operators[j].id || credential.token == config.operators[j].token) throw std::runtime_error("credential IDs and tokens must be unique");
+        }
+    }
     if (config.stateFile.empty()) throw std::runtime_error("stateFile must not be empty");
     const std::string level = lower(config.logLevel);
     if (level != "trace" && level != "debug" && level != "info" && level != "warn" && level != "error") {
@@ -607,7 +665,6 @@ void resolveConfig(CliOptions& options) {
     applyConfigFile(options.gateway, options.configPath);
     if (options.listenAddress) options.gateway.listenAddress = *options.listenAddress;
     if (options.port) options.gateway.port = *options.port;
-    if (options.authToken) options.gateway.authToken = *options.authToken;
     if (options.logLevel) options.gateway.logLevel = *options.logLevel;
     if (options.logDir) options.gateway.logDir = *options.logDir;
     if (options.stateFile) options.gateway.stateFile = *options.stateFile;
@@ -624,7 +681,7 @@ void printHelp() {
         << "  vision-realtime version|status|doctor [--config <json>] [--json]\n"
         << "  vision-realtime service install|start|stop|restart|status|uninstall\n"
         << "\nOptions:\n"
-        << "  --listen <address> --port <port> --token <token>\n"
+        << "  --listen <address> --port <port>\n"
         << "  --log-level <level> --log-dir <path> --state-file <path> --no-color\n";
 }
 
@@ -671,7 +728,6 @@ CliOptions parseArgs(int argc, char** argv) {
         if (arg == "--config") options.configPath = next();
         else if (arg == "--listen") options.listenAddress = next();
         else if (arg == "--port") options.port = std::stoi(next());
-        else if (arg == "--token") options.authToken = next();
         else if (arg == "--log-level") options.logLevel = next();
         else if (arg == "--log-dir") options.logDir = next();
         else if (arg == "--state-file") options.stateFile = next();
@@ -807,7 +863,7 @@ int runGateway(const GatewayConfig& config) {
 
 int printVersion(bool json) {
     if (json) {
-        std::cout << "{\"ok\":true,\"version\":\"" << jsonEscape(VISION_ONE_IEC104_GATEWAY_VERSION) << "\",\"apiVersion\":\"1\",\"backend\":\"" << backendName() << "\"}" << std::endl;
+        std::cout << "{\"ok\":true,\"version\":\"" << jsonEscape(VISION_ONE_IEC104_GATEWAY_VERSION) << "\",\"apiVersion\":\"1\",\"backend\":\"" << backendName() << "\",\"desiredStateVersion\":2,\"desiredStateHash\":\"sha256\"}" << std::endl;
         return 0;
     }
     std::cout << "Vision Realtime " << VISION_ONE_IEC104_GATEWAY_VERSION << " (backend=" << backendName() << ", api=1)" << std::endl;

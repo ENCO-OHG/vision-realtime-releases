@@ -44,6 +44,12 @@ Var PurgeCheckbox
 Var PurgeProgramData
 Var GeneratedToken
 Var TokenField
+Var GatewayTargetId
+Var ControllerId
+Var ControllerGeneration
+Var GatewayTargetIdField
+Var ControllerIdField
+Var ControllerGenerationField
 Var NewConfigCreated
 Var BackupDir
 Var HadCurrentInstall
@@ -58,6 +64,7 @@ Var InstallCommitted
 !define MUI_ICON "${STAGE_DIR}\icon.ico"
 !define MUI_UNICON "${STAGE_DIR}\icon.ico"
 !insertmacro MUI_PAGE_WELCOME
+Page custom CommissioningPageCreate CommissioningPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 Page custom TokenPageCreate
 !insertmacro MUI_PAGE_FINISH
@@ -81,6 +88,13 @@ Function .onInit
   StrCpy $ProgramDataDir "$APPDATA\EN-CO OHG\Vision Realtime"
   StrCpy $LegacyProgramDataDir "$APPDATA\EN-CO\Vision One IEC-104 Gateway"
   StrCpy $GeneratedToken ""
+  StrCpy $GatewayTargetId ""
+  StrCpy $ControllerId ""
+  StrCpy $ControllerGeneration "1"
+  ${GetParameters} $0
+  ${GetOptions} $0 "/GATEWAY_TARGET_ID=" $GatewayTargetId
+  ${GetOptions} $0 "/CONTROLLER_ID=" $ControllerId
+  ${GetOptions} $0 "/CONTROLLER_GENERATION=" $ControllerGeneration
   StrCpy $NewConfigCreated "0"
   StrCpy $BackupDir "$INSTDIR.rollback"
   StrCpy $HadCurrentInstall "0"
@@ -432,7 +446,7 @@ Section "Vision Realtime service" SEC_GATEWAY
     StrCpy $NewConfigCreated "1"
     File /oname=$PLUGINSDIR\gateway.json "${STAGE_DIR}\defaults\gateway.json"
     File /oname=$PLUGINSDIR\initialize-config.ps1 "${STAGE_DIR}\initialize-config.ps1"
-    nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\initialize-config.ps1" -TemplatePath "$PLUGINSDIR\gateway.json" -ConfigPath "$ProgramDataDir\config\gateway.json" -LegacyConfigPath "$LegacyProgramDataDir\config\gateway.json" -EmitToken'
+    nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\initialize-config.ps1" -TemplatePath "$PLUGINSDIR\gateway.json" -ConfigPath "$ProgramDataDir\config\gateway.json" -GatewayTargetId "$GatewayTargetId" -ControllerId "$ControllerId" -ControllerGeneration "$ControllerGeneration" -EmitToken'
     Pop $0
     Pop $GeneratedToken
     StrCpy $GeneratedToken $GeneratedToken 44
@@ -484,19 +498,73 @@ Section "Vision Realtime service" SEC_GATEWAY
   StrCpy $InstallCommitted "1"
 SectionEnd
 
-Function TokenPageCreate
-  ${If} $GeneratedToken == ""
-    Abort
-  ${EndIf}
+Function CommissioningPageCreate
+  IfFileExists "$ProgramDataDir\config\gateway.json" commissioning_skip
+  IfSilent commissioning_skip
 
-  !insertmacro MUI_HEADER_TEXT "Vision Realtime authentication token" "Copy this token into the Vision One IEC104 device settings."
+  !insertmacro MUI_HEADER_TEXT "Vision One commissioning" "Enter the identities shown in the Vision One IEC104 device settings."
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 36u "This token is shown only once. Store it securely and enter it as the authentication token in Vision One.$\r$\nDieser Token wird nur einmal angezeigt. Sicher speichern und in Vision One als Authentifizierungs-Token eintragen."
+  ${NSD_CreateLabel} 0 0 100% 20u "Gateway Target ID (Vision One):"
+  Pop $0
+  ${NSD_CreateText} 0 20u 100% 12u "$GatewayTargetId"
+  Pop $GatewayTargetIdField
+  ${NSD_CreateLabel} 0 40u 100% 20u "Controller ID (Vision One):"
+  Pop $0
+  ${NSD_CreateText} 0 60u 100% 12u "$ControllerId"
+  Pop $ControllerIdField
+  ${NSD_CreateLabel} 0 80u 100% 20u "Controller Generation:"
+  Pop $0
+  ${NSD_CreateText} 0 100u 100% 12u "$ControllerGeneration"
+  Pop $ControllerGenerationField
+  ${NSD_CreateLabel} 0 122u 100% 28u "Both IDs are full UUIDs shown in Vision One. The generated controller token is displayed after installation and must be stored in Vision One."
+  Pop $0
+
+  nsDialogs::Show
+  Return
+
+  commissioning_skip:
+  Abort
+FunctionEnd
+
+Function CommissioningPageLeave
+  IfFileExists "$ProgramDataDir\config\gateway.json" commissioning_leave_done
+  IfSilent commissioning_leave_done
+  ${NSD_GetText} $GatewayTargetIdField $GatewayTargetId
+  ${NSD_GetText} $ControllerIdField $ControllerId
+  ${NSD_GetText} $ControllerGenerationField $ControllerGeneration
+  ${If} $GatewayTargetId == ""
+    MessageBox MB_ICONSTOP "Gateway Target ID is required."
+    Abort
+  ${EndIf}
+  ${If} $ControllerId == ""
+    MessageBox MB_ICONSTOP "Controller ID is required."
+    Abort
+  ${EndIf}
+  ${If} $ControllerGeneration == ""
+    MessageBox MB_ICONSTOP "Controller Generation is required."
+    Abort
+  ${EndIf}
+  commissioning_leave_done:
+FunctionEnd
+
+Function TokenPageCreate
+  ${If} $GeneratedToken == ""
+    Abort
+  ${EndIf}
+
+  !insertmacro MUI_HEADER_TEXT "Vision Realtime controller token" "Copy this token into the Vision One IEC104 device settings."
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 36u "This token is shown only once. Store it securely and enter it as the Gateway Token in Vision One.$\r$\nDieser Token wird nur einmal angezeigt. Sicher speichern und in Vision One als Gateway-Token eintragen."
   Pop $0
   ${NSD_CreateText} 0 45u 100% 14u "$GeneratedToken"
   Pop $TokenField
@@ -527,7 +595,7 @@ Function un.PurgePageCreate
   ${If} $0 == error
     Abort
   ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 26u "Configuration, state, and logs are retained by default for later upgrades or reinstalls."
+  ${NSD_CreateLabel} 0 0 100% 26u "Configuration, state, and logs are retained by default for later reinstallation."
   Pop $0
   ${NSD_CreateCheckbox} 0 34u 100% 16u "Purge all Vision Realtime data from ProgramData"
   Pop $PurgeCheckbox

@@ -1,6 +1,7 @@
 #include "state_store.h"
 
 #include "json_utils.h"
+#include "sha256.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,105 +52,142 @@ JsonValue tagsJson(const std::vector<TagConfig>& tags) {
     return JsonValue(std::move(result));
 }
 
+DesiredState parseDesiredStateDocument(const JsonValue& root, bool persisted = false) {
+    if (!root.object()) throw std::runtime_error("root must be an object");
+    const auto requireOnlyFields = [](const JsonValue& value, std::initializer_list<const char*> allowed, const std::string& context) {
+        for (const auto& [key, unused] : *value.object()) {
+            (void)unused;
+            if (std::none_of(allowed.begin(), allowed.end(), [&](const char* allowedKey) { return key == allowedKey; })) throw std::runtime_error("unexpected field " + key + " in " + context);
+        }
+    };
+    if (persisted) {
+        requireOnlyFields(root, {"version", "gatewayTargetId", "controllerId", "controllerGeneration", "revision", "requestId", "devices", "hash"}, "desired state");
+        const auto* version = root.find("version");
+        if (!version || !version->number() || *version->number() != 2.0) throw std::runtime_error("state version must be 2");
+    }
+    else requireOnlyFields(root, {"gatewayTargetId", "controllerId", "controllerGeneration", "revision", "requestId", "devices"}, "desired state");
+    const auto requireString = [](const JsonValue& object, const char* key) -> const std::string& {
+        const auto* field = object.find(key);
+        if (!field || !field->string() || field->string()->empty()) throw std::runtime_error(std::string(key) + " must be a non-empty string");
+        return *field->string();
+    };
+    const auto requireSafeInteger = [](const JsonValue& object, const char* key) -> std::uint64_t {
+        const auto* field = object.find(key);
+        if (!field || !field->number() || std::floor(*field->number()) != *field->number() || *field->number() < 0 || *field->number() > 9007199254740991.0) throw std::runtime_error(std::string(key) + " must be a non-negative safe integer");
+        return static_cast<std::uint64_t>(*field->number());
+    };
+    const JsonValue* values = root.find("devices");
+    if (!values || !values->array()) throw std::runtime_error("root must contain a devices array");
+    DesiredState result;
+    result.gatewayTargetId = requireString(root, "gatewayTargetId");
+    result.controllerId = requireString(root, "controllerId");
+    result.controllerGeneration = requireSafeInteger(root, "controllerGeneration");
+    result.revision = requireSafeInteger(root, "revision");
+    result.requestId = requireString(root, "requestId");
+    for (const auto& value : *values->array()) {
+        if (!value.object()) throw std::runtime_error("device entry must be an object");
+        requireOnlyFields(value, {"deviceId", "desiredState", "connection", "tags"}, "device entry");
+        const auto* id = value.find("deviceId");
+        const auto* desired = value.find("desiredState");
+        if (!id || !id->string() || id->string()->empty()) throw std::runtime_error("deviceId must be a non-empty string");
+        if (!desired || !desired->string() || (*desired->string() != "running" && *desired->string() != "stopped")) throw std::runtime_error("desiredState must be running or stopped for device " + *id->string());
+        if (!value.find("connection") || !value.find("connection")->object()) throw std::runtime_error("connection must be an object for device " + *id->string());
+        if (!value.find("tags") || !value.find("tags")->array()) throw std::runtime_error("tags must be an array for device " + *id->string());
+        if (std::any_of(result.devices.begin(), result.devices.end(), [&](const auto& device) { return device.deviceId == *id->string(); })) throw std::runtime_error("duplicate deviceId: " + *id->string());
+        const JsonValue& connectionValue = *value.find("connection");
+        requireOnlyFields(connectionValue, {"remoteAddress", "remotePort", "commonAddress", "originatorAddress", "cotSize", "caSize", "ioaSize", "timeoutMs", "reconnectMs", "apciT0Sec", "apciT1Sec", "apciT2Sec", "apciT3Sec", "apciK", "apciW", "interrogationOnConnect", "clockSyncOnConnect"}, "connection for device " + *id->string());
+        const auto requireDeviceString = [&](const JsonValue& object, const char* key) {
+            const auto* field = object.find(key);
+            if (!field || !field->string()) throw std::runtime_error(std::string(key) + " must be a string for device " + *id->string());
+        };
+        const auto requireInteger = [&](const JsonValue& object, const char* key) {
+            const auto* field = object.find(key);
+            if (!field || !field->number() || std::floor(*field->number()) != *field->number()) throw std::runtime_error(std::string(key) + " must be an integer for device " + *id->string());
+        };
+        const auto requireBoolean = [&](const JsonValue& object, const char* key) {
+            const auto* field = object.find(key);
+            if (!field || !field->boolean()) throw std::runtime_error(std::string(key) + " must be a boolean for device " + *id->string());
+        };
+        requireDeviceString(connectionValue, "remoteAddress");
+        for (const char* key : {"remotePort", "commonAddress", "originatorAddress", "cotSize", "caSize", "ioaSize", "timeoutMs", "reconnectMs", "apciT0Sec", "apciT1Sec", "apciT2Sec", "apciT3Sec", "apciK", "apciW"}) requireInteger(connectionValue, key);
+        requireBoolean(connectionValue, "interrogationOnConnect");
+        requireBoolean(connectionValue, "clockSyncOnConnect");
+        for (const auto& tagValue : *value.find("tags")->array()) {
+            if (!tagValue.object()) throw std::runtime_error("tag entry must be an object for device " + *id->string());
+            requireOnlyFields(tagValue, {"tagId", "visionType", "deviceDataType", "ioa", "qualifier", "writable", "selectBeforeOperate"}, "tag for device " + *id->string());
+            requireDeviceString(tagValue, "tagId"); requireDeviceString(tagValue, "visionType"); requireDeviceString(tagValue, "deviceDataType");
+            requireInteger(tagValue, "ioa"); requireInteger(tagValue, "qualifier");
+            requireBoolean(tagValue, "writable"); requireBoolean(tagValue, "selectBeforeOperate");
+        }
+        const auto tags = parseTags(value);
+        if (tags.size() != value.find("tags")->array()->size()) throw std::runtime_error("invalid tag entry for device " + *id->string());
+        const auto connection = parseConnection(connectionValue);
+        if (const auto error = validateConnectionConfig(connection)) throw std::runtime_error(*error + " for device " + *id->string());
+        result.devices.push_back({*id->string(), tags, connection, *desired->string()});
+    }
+    result.hash = desiredStateHash(result);
+    return result;
+}
+
 } // namespace
 
 StateStore::StateStore(std::string path) : path_(std::move(path)) {}
 
 void StateStore::load() {
     std::lock_guard<std::mutex> lock(mutex_);
-    devices_.clear();
+    desiredState_ = {};
     const std::filesystem::path path(path_);
     if (!std::filesystem::exists(path)) return;
     try {
         const JsonValue root = parseJson(readFile(path));
         const JsonValue* version = root.find("version");
-        const JsonValue* values = root.find("devices");
-        if (!root.object() || !version || !version->number() || *version->number() != 1.0) throw std::runtime_error("unsupported or missing state version");
-        if (!values || !values->array()) throw std::runtime_error("root must contain a devices array");
-        for (const auto& value : *values->array()) {
-            if (!value.object()) throw std::runtime_error("device entry must be an object");
-            const auto* id = value.find("deviceId");
-            const auto* desired = value.find("desiredRunning");
-            if (!id || !id->string() || id->string()->empty()) throw std::runtime_error("deviceId must be a non-empty string");
-            if (!desired || !desired->boolean()) throw std::runtime_error("desiredRunning must be a boolean for device " + *id->string());
-            if (!value.find("connection") || !value.find("connection")->object()) throw std::runtime_error("connection must be an object for device " + *id->string());
-            if (!value.find("tags") || !value.find("tags")->array()) throw std::runtime_error("tags must be an array for device " + *id->string());
-            if (std::any_of(devices_.begin(), devices_.end(), [&](const auto& device) { return device.deviceId == *id->string(); })) throw std::runtime_error("duplicate deviceId: " + *id->string());
-            const JsonValue& connectionValue = *value.find("connection");
-            const auto requireString = [&](const JsonValue& object, const char* key) {
-                const auto* field = object.find(key);
-                if (!field || !field->string()) throw std::runtime_error(std::string(key) + " must be a string for device " + *id->string());
-            };
-            const auto requireInteger = [&](const JsonValue& object, const char* key) {
-                const auto* field = object.find(key);
-                if (!field || !field->number() || std::floor(*field->number()) != *field->number()) throw std::runtime_error(std::string(key) + " must be an integer for device " + *id->string());
-            };
-            const auto requireBoolean = [&](const JsonValue& object, const char* key) {
-                const auto* field = object.find(key);
-                if (!field || !field->boolean()) throw std::runtime_error(std::string(key) + " must be a boolean for device " + *id->string());
-            };
-            requireString(connectionValue, "remoteAddress");
-            for (const char* key : {"remotePort", "commonAddress", "originatorAddress", "cotSize", "caSize", "ioaSize", "timeoutMs", "reconnectMs", "apciT0Sec", "apciT1Sec", "apciT2Sec", "apciT3Sec", "apciK", "apciW"}) {
-                requireInteger(connectionValue, key);
-            }
-            requireBoolean(connectionValue, "interrogationOnConnect");
-            requireBoolean(connectionValue, "clockSyncOnConnect");
-            for (const auto& tagValue : *value.find("tags")->array()) {
-                if (!tagValue.object()) throw std::runtime_error("tag entry must be an object for device " + *id->string());
-                requireString(tagValue, "tagId");
-                requireString(tagValue, "visionType");
-                requireString(tagValue, "deviceDataType");
-                requireInteger(tagValue, "ioa");
-                requireInteger(tagValue, "qualifier");
-                requireBoolean(tagValue, "writable");
-                requireBoolean(tagValue, "selectBeforeOperate");
-            }
-            const auto tags = parseTags(value);
-            if (tags.size() != value.find("tags")->array()->size()) throw std::runtime_error("invalid tag entry for device " + *id->string());
-            const auto connection = parseConnection(connectionValue);
-            if (const auto error = validateConnectionConfig(connection)) throw std::runtime_error(*error + " for device " + *id->string());
-            devices_.push_back({*id->string(), tags, connection, *desired->boolean()});
-        }
+        if (version && version->number() && *version->number() == 1.0) throw std::runtime_error("state version 1 is not supported; replace the state file with a version 2 desired-state document");
+        const DesiredState desired = parseDesiredStateDocument(root, true);
+        const auto* persistedHash = root.find("hash");
+        if (!persistedHash || !persistedHash->string() || *persistedHash->string() != desired.hash) throw std::runtime_error("state hash does not match the persisted desired state");
+        desiredState_ = desired;
     } catch (const std::exception& e) {
-        devices_.clear();
+        desiredState_ = {};
         throw std::runtime_error("invalid state file '" + path_ + "': " + e.what());
     }
 }
 
-void StateStore::updateConfig(const std::string& deviceId, const std::vector<TagConfig>& tags, const ConnectionConfig& connection) {
+bool StateStore::replace(DesiredState desiredState) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto previous = devices_;
-    auto it = std::find_if(devices_.begin(), devices_.end(), [&](const auto& device) { return device.deviceId == deviceId; });
-    if (it == devices_.end()) devices_.push_back({deviceId, tags, connection, false});
-    else { it->tags = tags; it->connection = connection; }
+    const std::string hash = desiredStateHash(desiredState);
+    if (!desiredState.hash.empty() && desiredState.hash != hash) throw std::runtime_error("desired-state hash does not match its payload");
+    desiredState.hash = hash;
+    if (desiredState.revision < desiredState_.revision) throw std::runtime_error("desired-state revision is lower than the current revision");
+    if (desiredState.revision == desiredState_.revision) {
+        if (desiredState.hash == desiredState_.hash) return false;
+        throw std::runtime_error("desired-state revision has a different payload");
+    }
+    const auto previous = desiredState_;
+    desiredState_ = std::move(desiredState);
     try { saveLocked(); }
-    catch (...) { devices_ = previous; throw; }
+    catch (...) { desiredState_ = previous; throw; }
+    return true;
 }
 
-void StateStore::updateDesiredRunning(const std::string& deviceId, bool desiredRunning) {
+DesiredState StateStore::desiredState() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = std::find_if(devices_.begin(), devices_.end(), [&](const auto& device) { return device.deviceId == deviceId; });
-    if (it == devices_.end()) throw std::runtime_error("device is not configured: " + deviceId);
-    const bool previous = it->desiredRunning;
-    it->desiredRunning = desiredRunning;
-    try { saveLocked(); }
-    catch (...) { it->desiredRunning = previous; throw; }
+    return desiredState_;
 }
 
 std::vector<PersistedDevice> StateStore::devices() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return devices_;
+    return desiredState_.devices;
 }
 
 void StateStore::saveLocked() const {
     JsonValue::Array devices;
-    for (const auto& device : devices_) {
+    for (const auto& device : desiredState_.devices) {
         devices.emplace_back(JsonValue::Object{
-            {"connection", connectionJson(device.connection)}, {"desiredRunning", JsonValue(device.desiredRunning)},
+            {"connection", connectionJson(device.connection)}, {"desiredState", JsonValue(device.desiredState)},
             {"deviceId", JsonValue(device.deviceId)}, {"tags", tagsJson(device.tags)},
         });
     }
-    const std::string json = serializeJson(JsonValue(JsonValue::Object{{"devices", JsonValue(std::move(devices))}, {"version", JsonValue(1.0)}})) + "\n";
+    const std::string json = serializeJson(JsonValue(JsonValue::Object{{"controllerGeneration", JsonValue(static_cast<double>(desiredState_.controllerGeneration))}, {"controllerId", JsonValue(desiredState_.controllerId)}, {"devices", JsonValue(std::move(devices))}, {"gatewayTargetId", JsonValue(desiredState_.gatewayTargetId)}, {"hash", JsonValue(desiredState_.hash)}, {"requestId", JsonValue(desiredState_.requestId)}, {"revision", JsonValue(static_cast<double>(desiredState_.revision))}, {"version", JsonValue(2.0)}})) + "\n";
     const std::filesystem::path target(path_);
     const std::filesystem::path parent = target.parent_path().empty() ? std::filesystem::current_path() : target.parent_path();
     std::filesystem::create_directories(parent);
@@ -174,4 +212,14 @@ void StateStore::saveLocked() const {
         throw std::runtime_error("cannot replace state file '" + path_ + "': " + error.message());
     }
 #endif
+}
+
+DesiredState parseDesiredState(const JsonValue& root) {
+    return parseDesiredStateDocument(root);
+}
+
+std::string desiredStateHash(const DesiredState& desiredState) {
+    JsonValue::Array devices;
+    for (const auto& device : desiredState.devices) devices.emplace_back(JsonValue(JsonValue::Object{{"connection", connectionJson(device.connection)}, {"desiredState", JsonValue(device.desiredState)}, {"deviceId", JsonValue(device.deviceId)}, {"tags", tagsJson(device.tags)}}));
+    return sha256Hex(serializeJson(JsonValue(JsonValue::Object{{"controllerGeneration", JsonValue(static_cast<double>(desiredState.controllerGeneration))}, {"controllerId", JsonValue(desiredState.controllerId)}, {"devices", JsonValue(std::move(devices))}, {"gatewayTargetId", JsonValue(desiredState.gatewayTargetId)}, {"revision", JsonValue(static_cast<double>(desiredState.revision))}})));
 }

@@ -29,7 +29,8 @@ Production package behavior:
 
 Available API model:
 
-- shared bearer-token authentication
+- controller credentials for revisioned desired-state replacement
+- optional operator credentials for events and data-plane operations
 - multiple gateway device IDs in the runtime registry
 - device configure/start/stop/status/write/interrogate operations
 - WebSocket events
@@ -38,11 +39,11 @@ Available API model:
 Still planned:
 
 - isolated multi-client subscriptions instead of global event broadcast
-- client pairing, identities, credentials, and permissions
+- client pairing and identity administration
 - one explicit configuration master with controlled transfer
-- gateway-side enforcement of read/write/configuration roles
+- configuration-master transfer
 
-Until those planned functions ship, do not describe a deployment as paired, permission-isolated, or config-master controlled. Separate client installations using one shared token are not the intended final multi-client security model.
+Until those planned functions ship, do not describe a deployment as paired or config-master controlled. Controller and operator credentials are enforced, but operator lifecycle administration is not yet implemented.
 
 Planned stable identities are `gatewayDeviceId`, `instanceId`, `sessionId`, and `commandId` for device ownership, client identity, connection identity, idempotency, and auditing.
 
@@ -86,7 +87,7 @@ C:\ProgramData\EN-CO OHG\Vision Realtime\logs\vision-realtime.log
 C:\ProgramData\EN-CO OHG\Vision Realtime\logs\service\
 ```
 
-Program binaries, WinSW wrapper/configuration, licenses, and notices are installed under `Program Files`. Mutable configuration, token material, atomic JSON device state, and logs are stored under the exact `ProgramData` paths above; upgrades do not overwrite them. The installer, executable, and Windows uninstall entry use the Vision Realtime app icon.
+Program binaries, WinSW wrapper/configuration, licenses, and notices are installed under `Program Files`. Mutable configuration, controller/operator credential material, atomic JSON device state, and logs are stored under the exact `ProgramData` paths above. The installer, executable, and Windows uninstall entry use the Vision Realtime app icon.
 
 WinSW registers and supervises service ID `VisionRealtime` through SCM, starts it automatically with delayed auto-start, and runs it as `NT AUTHORITY\LocalService`. The gateway CLI's implemented `service install|start|stop|restart|status|uninstall` commands delegate to `VisionRealtime.exe`. Service recovery restarts unexpected failures without creating a second gateway process. The installer grants LocalService modify access to the Vision Realtime `ProgramData` tree.
 
@@ -102,10 +103,11 @@ Installer requirements:
 
 - publish setup executable, matching GitHub source archives from the public release tag, and `SHA256SUMS.txt`
 - carry Authenticode signing where release infrastructure provides it
-- preserve `ProgramData` on normal upgrade and uninstall
+- preserve `ProgramData` on normal uninstall
 - remove service registration and installed binaries on normal uninstall
 - retain configuration, credentials, state, and logs on normal uninstall
 - expose the uninstaller purge checkbox and support unattended purge with `Uninstall.exe /S /PURGE`
+- request Gateway Target ID, Controller ID, and Controller Generation during first-install commissioning
 - verify service start, `/health`, `/version`, `backend=lib60870`, restart persistence, and one RTU connection before release
 
 Operator steps are documented bilingually in [QUICKSTART_WINDOWS.md](QUICKSTART_WINDOWS.md).
@@ -158,5 +160,5 @@ Before enabling production writes or declaring multi-client readiness:
 - Validate select-before-operate against RTUs that positively and negatively confirm both phases.
 - Extend the current single in-flight command guard to a bounded per-connection queue for multiple writers.
 - Replace global WebSocket broadcasting with client/device subscription filtering.
-- Implement gateway-side client credentials, permissions, pairing, and config-master transfer.
+- Implement client pairing and configuration-master transfer.
 - Validate firewall behavior on the supported Windows versions.

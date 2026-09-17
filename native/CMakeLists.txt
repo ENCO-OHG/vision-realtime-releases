@@ -17,6 +17,8 @@ endif()
 
 project(vision-realtime VERSION ${VISION_REALTIME_VERSION} LANGUAGES CXX)
 
+set(VISION_REALTIME_DESIRED_STATE_VERSION 2)
+
 option(VISION_REALTIME_WITH_LIB60870 "Build with lib60870-C support" OFF)
 set(VISION_REALTIME_LIB60870_DIR "" CACHE PATH "Path to the lib60870-C directory")
 
@@ -27,6 +29,7 @@ set(VISION_REALTIME_SOURCES
     src/net/socket_utils.cpp
     src/net/websocket_broadcaster.cpp
     src/runtime/device_registry.cpp
+    src/runtime/sha256.cpp
     src/runtime/state_store.cpp
 )
 
@@ -65,6 +68,7 @@ add_executable(vision-realtime
 configure_file(src/version/gateway_version.h.in generated/gateway_version.h @ONLY)
 
 target_compile_features(vision-realtime PRIVATE cxx_std_20)
+target_compile_definitions(vision-realtime PRIVATE VISION_REALTIME_DESIRED_STATE_VERSION=${VISION_REALTIME_DESIRED_STATE_VERSION})
 target_include_directories(vision-realtime PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_LIST_DIR}/src/api"
@@ -122,11 +126,15 @@ if (BUILD_TESTING)
     add_executable(vision-realtime-state-store-tests
         src/tests/state_store_tests.cpp
         src/api/json_utils.cpp
+        src/backend/mock_backend.cpp
+        src/runtime/device_registry.cpp
         src/runtime/state_store.cpp
+        src/runtime/sha256.cpp
     )
     target_compile_features(vision-realtime-state-store-tests PRIVATE cxx_std_20)
     target_include_directories(vision-realtime-state-store-tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/src/api"
+        "${CMAKE_CURRENT_LIST_DIR}/src/backend"
         "${CMAKE_CURRENT_LIST_DIR}/src/runtime"
     )
     add_test(NAME vision-realtime-state-store-tests COMMAND vision-realtime-state-store-tests)

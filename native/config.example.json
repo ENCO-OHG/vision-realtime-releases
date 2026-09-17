@@ -1,7 +1,21 @@
 {
   "listenAddress": "127.0.0.1",
   "port": 24104,
-  "authToken": "",
+  "credentials": {
+    "controller": {
+      "id": "controller-local",
+      "token": "replace-with-a-long-random-controller-token",
+      "gatewayTargetId": "gateway-local",
+      "controllerId": "vision-one-local",
+      "controllerGeneration": 1
+    },
+    "operators": [
+      {
+        "id": "operator-local",
+        "token": "replace-with-a-long-random-operator-token"
+      }
+    ]
+  },
   "logLevel": "info",
   "logDir": "logs",
   "stateFile": "vision-realtime-state.json"

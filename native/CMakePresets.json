@@ -2,23 +2,43 @@
   "version": 3,
   "configurePresets": [
     {
-      "name": "iec104-lib60870-release",
-      "displayName": "Vision Realtime lib60870 Release",
-      "description": "Configure Vision Realtime with the real lib60870-C backend.",
-      "generator": "Visual Studio 18 2026",
-      "binaryDir": "${sourceDir}/../build/vision-realtime-lib60870",
+      "name": "iec104-lib60870-base",
+      "hidden": true,
       "cacheVariables": {
         "VISION_REALTIME_WITH_LIB60870": "ON",
         "VISION_REALTIME_LIB60870_DIR": "${sourceDir}/../third_party/lib60870/lib60870-C"
+      }
+    },
+    {
+      "name": "iec104-lib60870-release",
+      "displayName": "Vision Realtime lib60870 Windows Release",
+      "description": "Configure the real lib60870-C backend for Windows.",
+      "inherits": "iec104-lib60870-base",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/../build/vision-realtime-lib60870"
+    },
+    {
+      "name": "iec104-lib60870-macos-release",
+      "displayName": "Vision Realtime lib60870 macOS Release",
+      "description": "Configure the real lib60870-C backend for macOS.",
+      "inherits": "iec104-lib60870-base",
+      "binaryDir": "${sourceDir}/../build/vision-realtime-lib60870-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],
   "buildPresets": [
     {
       "name": "iec104-lib60870-release",
-      "displayName": "Vision Realtime lib60870 Release",
+      "displayName": "Vision Realtime lib60870 Windows Release",
       "configurePreset": "iec104-lib60870-release",
       "configuration": "Release"
+    },
+    {
+      "name": "iec104-lib60870-macos-release",
+      "displayName": "Vision Realtime lib60870 macOS Release",
+      "configurePreset": "iec104-lib60870-macos-release"
     }
   ]
 }

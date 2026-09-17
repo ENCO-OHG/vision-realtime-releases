@@ -1,13 +1,22 @@
 #pragma once
 
 #include <map>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 struct GatewayConfig {
     std::string listenAddress = "127.0.0.1";
     int port = 24104;
-    std::string authToken;
+    struct Credential {
+        std::string id;
+        std::string token;
+    };
+    Credential controller;
+    std::vector<Credential> operators;
+    std::string gatewayTargetId;
+    std::string controllerId;
+    std::uint64_t controllerGeneration = 0;
     std::string logLevel = "info";
     std::string logDir;
     std::string stateFile = "vision-realtime-state.json";

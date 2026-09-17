@@ -259,16 +259,26 @@ BackendResult Lib60870Backend::stop(const std::string& deviceId) {
     closeStoppedConnection(stoppedWorker);
     if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
     devices_.finishRealStop(deviceId);
+    devices_.clearCachedValues(deviceId);
+    return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false, "off")}};
+}
+
+BackendResult Lib60870Backend::remove(const std::string& deviceId) {
+    auto stoppedWorker = devices_.remove(deviceId);
+    closeStoppedConnection(stoppedWorker);
+    if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false, "off")}};
 }
 
 BackendResult Lib60870Backend::status(const std::string& deviceId) {
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto state = devices_.status(deviceId);
     std::string runtimeState = state.running ? (state.realConnected ? "running" : "connecting") : "off";
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"gatewayConnected\":true,\"iec104Connected\":" + (state.realConnected ? "true" : "false") + ",\"state\":\"" + runtimeState + "\",\"lastError\":\"" + jsonEscape(state.lastError) + "\"}"};
 }
 
 BackendResult Lib60870Backend::write(const std::string& deviceId, const WriteRequest& request) {
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto write = devices_.prepareWrite(deviceId, request.tagId, request.ioa, request.value);
     if (!write.connected) return {.status = 409, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"not-connected\"}"};
     if (!write.found) return {.status = 404, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"unknown-ioa\"}"};
@@ -332,6 +342,7 @@ BackendResult Lib60870Backend::write(const std::string& deviceId, const WriteReq
 }
 
 BackendResult Lib60870Backend::interrogate(const std::string& deviceId, int qualifier) {
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto interrogation = devices_.prepareInterrogate(deviceId);
     if (!interrogation.connected) return {.status = 409, .body = "{\"ok\":false,\"error\":\"not-connected\"}"};
     bool sent = false;
@@ -506,7 +517,9 @@ void Lib60870Backend::logAsduReceived(const std::string& deviceId, TypeID type, 
 void Lib60870Backend::emitValue(const std::string& deviceId, int ioa, const std::string& asduType, double value, uint8_t quality, uint64_t timestampMs, CS101_CauseOfTransmission cot) {
     std::string tagId = devices_.tagIdForIoa(deviceId, ioa);
     logSink_("IEC104 value device=" + deviceId + " ioa=" + std::to_string(ioa) + " type=" + asduType + " value=" + std::to_string(value) + " quality=" + std::to_string(quality) + " tagId=" + (tagId.empty() ? "<unmatched>" : tagId));
-    eventSink_(valueEvent(deviceId, ioa, tagId, asduType, value, quality, timestampMs, static_cast<int>(cot)));
+    const std::string event = valueEvent(deviceId, ioa, tagId, asduType, value, quality, timestampMs, static_cast<int>(cot));
+    if ((quality & 0x80) == 0) devices_.cacheValue(deviceId, tagId, ioa, asduType, event);
+    eventSink_(event);
 }
 
 void Lib60870Backend::handleCommandConfirmation(const CommandConfirmation& confirmation) {

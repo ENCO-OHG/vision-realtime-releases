@@ -26,6 +26,7 @@ public:
     virtual BackendResult configure(const std::string& deviceId, const std::vector<TagConfig>& tags, const ConnectionConfig& connection) = 0;
     virtual BackendResult start(const std::string& deviceId) = 0;
     virtual BackendResult stop(const std::string& deviceId) = 0;
+    virtual BackendResult remove(const std::string& deviceId) = 0;
     virtual BackendResult status(const std::string& deviceId) = 0;
     virtual BackendResult write(const std::string& deviceId, const WriteRequest& request) = 0;
     virtual BackendResult interrogate(const std::string& deviceId, int qualifier) = 0;

@@ -3,7 +3,9 @@ param(
     [string]$TemplatePath,
     [Parameter(Mandatory = $true)]
     [string]$ConfigPath,
-    [string]$LegacyConfigPath,
+    [string]$GatewayTargetId,
+    [string]$ControllerId,
+    [string]$ControllerGeneration,
     [switch]$EmitToken
 )
 
@@ -14,36 +16,38 @@ if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
 }
 
 $template = Get-Content -LiteralPath $TemplatePath -Raw | ConvertFrom-Json
-if ($template.authToken -ne '__GENERATE_SECURE_TOKEN__') {
+if ($template.credentials.controller.token -ne '__GENERATE_SECURE_TOKEN__') {
     throw 'Configuration template does not contain the expected token placeholder.'
 }
-
-$generatedToken = $false
-if ($LegacyConfigPath -and (Test-Path -LiteralPath $LegacyConfigPath -PathType Leaf)) {
-    $config = Get-Content -LiteralPath $LegacyConfigPath -Raw | ConvertFrom-Json
-    if (-not $config.authToken -or $config.authToken -eq '__GENERATE_SECURE_TOKEN__') {
-        throw 'Legacy configuration does not contain a secure authentication token.'
-    }
-
-    $legacyStatePath = [string]$config.stateFile
-    $config | Add-Member -NotePropertyName logDir -NotePropertyValue $template.logDir -Force
-    $config | Add-Member -NotePropertyName stateFile -NotePropertyValue $template.stateFile -Force
-    if ($legacyStatePath -and (Test-Path -LiteralPath $legacyStatePath -PathType Leaf)) {
-        [System.IO.Directory]::CreateDirectory((Split-Path -Parent $template.stateFile)) | Out-Null
-        Copy-Item -LiteralPath $legacyStatePath -Destination $template.stateFile -Force
-    }
-} else {
-    $config = $template
-    $tokenBytes = New-Object byte[] 32
-    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $generator.GetBytes($tokenBytes)
-    } finally {
-        $generator.Dispose()
-    }
-    $config.authToken = [Convert]::ToBase64String($tokenBytes)
-    $generatedToken = $true
+if ($template.credentials.controller.gatewayTargetId -ne '__GATEWAY_TARGET_ID__' -or $template.credentials.controller.controllerId -ne '__CONTROLLER_ID__') {
+    throw 'Configuration template does not contain the expected controller identity placeholders.'
 }
+
+$gatewayTargetGuid = [Guid]::Empty
+if (-not [Guid]::TryParse($GatewayTargetId, [ref]$gatewayTargetGuid)) {
+    throw 'GatewayTargetId must be a UUID.'
+}
+$controllerGuid = [Guid]::Empty
+if (-not [Guid]::TryParse($ControllerId, [ref]$controllerGuid)) {
+    throw 'ControllerId must be a UUID.'
+}
+$controllerGenerationValue = [UInt64]0
+if (-not [UInt64]::TryParse($ControllerGeneration, [ref]$controllerGenerationValue) -or $controllerGenerationValue -gt 9007199254740991) {
+    throw 'ControllerGeneration must be a non-negative safe integer.'
+}
+
+$config = $template
+$tokenBytes = New-Object byte[] 32
+$generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $generator.GetBytes($tokenBytes)
+} finally {
+    $generator.Dispose()
+}
+$config.credentials.controller.token = [Convert]::ToBase64String($tokenBytes)
+$config.credentials.controller.gatewayTargetId = $gatewayTargetGuid.ToString()
+$config.credentials.controller.controllerId = $controllerGuid.ToString()
+$config.credentials.controller.controllerGeneration = $controllerGenerationValue
 
 $json = $config | ConvertTo-Json -Depth 8
 $parent = Split-Path -Parent $ConfigPath
@@ -57,6 +61,6 @@ try {
         Remove-Item -LiteralPath $temporaryPath -Force
     }
 }
-if ($EmitToken -and $generatedToken) {
-    Write-Output $config.authToken
+if ($EmitToken) {
+    Write-Output $config.credentials.controller.token
 }

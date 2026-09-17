@@ -1,5 +1,7 @@
 #include "json_utils.h"
+#include "mock_backend.h"
 #include "state_store.h"
+#include "sha256.h"
 
 #include <filesystem>
 #include <fstream>
@@ -22,29 +24,109 @@ void parserHandlesNestedAndEscapedValues() {
     require(rejected, "invalid JSON was accepted");
 }
 
+void sha256MatchesKnownValue() {
+    require(sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 result differs");
+}
+
+DesiredState desiredState() {
+    ConnectionConfig connection;
+    connection.remoteAddress = "10.0.0.7";
+    connection.remotePort = 2405;
+    return {.gatewayTargetId = "gateway-1", .controllerId = "controller-1", .controllerGeneration = 3, .revision = 7, .requestId = "request-1", .devices = {{.deviceId = "device-1", .tags = {{.tagId = "tag-1", .ioa = 17, .deviceDataType = "M_SP_NA_1"}}, .connection = connection, .desiredState = "running"}}};
+}
+
 void stateRoundTripsAndPreservesDesiredRunning() {
     const auto path = std::filesystem::temp_directory_path() / "vision-realtime-state-store-test.json";
     const auto temporary = std::filesystem::path(path.string() + ".tmp");
     std::filesystem::remove(path);
     std::filesystem::remove(temporary);
 
-    ConnectionConfig connection;
-    connection.remoteAddress = "10.0.0.7";
-    connection.remotePort = 2405;
-    const std::vector<TagConfig> tags{{.tagId = "tag-1", .ioa = 17, .deviceDataType = "M_SP_NA_1"}};
     StateStore writer(path.string());
     writer.load();
-    writer.updateConfig("device-1", tags, connection);
-    writer.updateDesiredRunning("device-1", true);
+    writer.replace(desiredState());
     require(!std::filesystem::exists(temporary), "temporary state file remained after save");
 
     StateStore reader(path.string());
     reader.load();
     const auto devices = reader.devices();
     require(devices.size() == 1, "persisted device count differs");
-    require(devices[0].deviceId == "device-1" && devices[0].desiredRunning, "desired-running state differs");
+    require(devices[0].deviceId == "device-1" && devices[0].desiredState == "running", "desired state differs");
     require(devices[0].connection.remoteAddress == "10.0.0.7" && devices[0].tags[0].ioa == 17, "device configuration differs");
+    require(reader.desiredState().revision == 7 && reader.desiredState().hash.size() == 64, "desired-state revision or hash differs");
     std::filesystem::remove(path);
+}
+
+void stateVersionOneIsExplicitlyRejected() {
+    const auto path = std::filesystem::temp_directory_path() / "vision-realtime-v1-state-test.json";
+    {
+        std::ofstream output(path, std::ios::trunc);
+        output << "{\"version\":1,\"devices\":[]}";
+    }
+    bool rejected = false;
+    try {
+        StateStore store(path.string());
+        store.load();
+    } catch (const std::exception& e) {
+        rejected = std::string(e.what()).find("state version 1 is not supported") != std::string::npos;
+    }
+    std::filesystem::remove(path);
+    require(rejected, "state version 1 was not explicitly rejected");
+}
+
+void staleFenceIsRejected() {
+    const auto path = std::filesystem::temp_directory_path() / "vision-realtime-revision-state-test.json";
+    std::filesystem::remove(path);
+    StateStore store(path.string());
+    store.load();
+    store.replace(desiredState());
+    bool rejected = false;
+    require(!store.replace(desiredState()), "matching revision and payload was not idempotent");
+    auto changed = desiredState();
+    changed.devices[0].desiredState = "stopped";
+    try { store.replace(changed); } catch (const std::exception& e) { rejected = std::string(e.what()).find("different payload") != std::string::npos; }
+    std::filesystem::remove(path);
+    require(rejected, "same revision with a different payload was accepted");
+    auto older = desiredState();
+    older.revision = 6;
+    rejected = false;
+    try { store.replace(older); } catch (const std::exception& e) { rejected = std::string(e.what()).find("lower") != std::string::npos; }
+    require(rejected, "lower revision was accepted");
+}
+
+void desiredStateRejectsUnexpectedFields() {
+    bool rejected = false;
+    try {
+        (void)parseDesiredState(parseJson("{\"gatewayTargetId\":\"gateway-1\",\"controllerId\":\"controller-1\",\"controllerGeneration\":1,\"revision\":1,\"requestId\":\"request-1\",\"devices\":[],\"legacy\":true}"));
+    } catch (const std::exception& e) {
+        rejected = std::string(e.what()).find("unexpected field legacy") != std::string::npos;
+    }
+    require(rejected, "desired state accepted an unexpected field");
+}
+
+void removedDeviceNoLongerHasStatus() {
+    DeviceRegistry registry;
+    MockBackend backend(registry);
+    ConnectionConfig connection;
+    backend.configure("device-1", {}, connection);
+    require(backend.status("device-1").status == 200, "configured device had no status");
+    backend.remove("device-1");
+    require(backend.status("device-1").status == 404, "removed device remained in the registry");
+}
+
+void cachedValuesReplayOnlyMatchingConfiguredTags() {
+    DeviceRegistry registry;
+    ConnectionConfig connection;
+    const TagConfig tag{.tagId = "tag-1", .ioa = 17, .deviceDataType = "M_SP_NA_1"};
+    registry.configure("device-1", {tag}, connection);
+    registry.cacheValue("device-1", tag.tagId, tag.ioa, tag.deviceDataType, "value-1");
+    registry.cacheValue("device-1", "removed", 18, "M_ME_NC_1", "value-removed");
+    require(registry.cachedValueEvents("device-1").size() == 2, "cached values were not retained");
+
+    registry.configure("device-1", {tag}, connection);
+    const auto replay = registry.cachedValueEvents("device-1");
+    require(replay.size() == 1 && replay[0] == "value-1", "cache retained a value for an unconfigured tag");
+    registry.clearCachedValues("device-1");
+    require(registry.cachedValueEvents("device-1").empty(), "cached values were not cleared");
 }
 
 void invalidStateReportsItsPath() {
@@ -69,8 +151,14 @@ void invalidStateReportsItsPath() {
 int main() {
     try {
         parserHandlesNestedAndEscapedValues();
+        sha256MatchesKnownValue();
         stateRoundTripsAndPreservesDesiredRunning();
         invalidStateReportsItsPath();
+        stateVersionOneIsExplicitlyRejected();
+        staleFenceIsRejected();
+        desiredStateRejectsUnexpectedFields();
+        removedDeviceNoLongerHasStatus();
+        cachedValuesReplayOnlyMatchingConfiguredTags();
         std::cout << "state store tests passed\n";
         return 0;
     } catch (const std::exception& e) {

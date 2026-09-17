@@ -1,41 +1,33 @@
 # Vision Realtime IEC-104 Gateway
 
-Vision Realtime by EN-CO OHG is a standalone C++20 service that connects applications to IEC 60870-5-104 RTUs through `lib60870-C`.
+Vision Realtime by EN-CO OHG is a C++20 IEC 60870-5-104 gateway service. It exposes a local HTTP/WebSocket API and connects to RTUs through `lib60870-C`.
 
-## Deployment Model
+## Overview
 
 ```text
-Application -- HTTP/WebSocket API --> Vision Realtime IEC-104 Gateway -- IEC-104/TCP --> RTU
-                 default 24104                         default 2404
+Application -- HTTP/WebSocket API --> Vision Realtime -- IEC-104/TCP --> RTU
+                 default 24104              default 2404
 ```
 
-The gateway is a separate product with its own installer, Windows service, lifecycle, configuration, state, logs, and upgrade path. Applications connect to an already running gateway; they do not start or own the gateway service. The default local gateway URL is `http://127.0.0.1:24104`, and API routes are under `/api/v1`.
+The default local gateway URL is `http://127.0.0.1:24104`. API routes are under `/api/v1`. Windows packages install the gateway as a Windows service with configuration, state, and logs under `C:\ProgramData\EN-CO OHG\Vision Realtime`.
 
 For Windows installation, commissioning, firewall, upgrade, removal, and troubleshooting, see [QUICKSTART_WINDOWS.md](QUICKSTART_WINDOWS.md). Architecture and packaging requirements are in [DEPLOYMENT.md](DEPLOYMENT.md).
-
-## Versioning
-
-Vision Realtime starts its independent product version line at `1.0.0-beta.1`. Earlier internal beta builds used the Vision One application version; future Vision Realtime releases are versioned independently.
 
 ## Current Contract
 
 ```http
 GET  /api/v1/health
 GET  /api/v1/version
-POST /api/v1/devices/:deviceId/config
-POST /api/v1/devices/:deviceId/start
-POST /api/v1/devices/:deviceId/stop
+PUT  /api/v1/desired-state
 GET  /api/v1/devices/:deviceId/status
 POST /api/v1/devices/:deviceId/write
 POST /api/v1/devices/:deviceId/interrogate
 WS   /api/v1/events
 ```
 
-The API supports optional bearer-token authentication. Production deployments should configure a strong token. `/health` and `/version` identify the running version/backend; device operations and WebSocket access use the configured token.
+The API uses local bearer-token credentials. The controller credential is required for complete revisioned desired-state replacement. Operator credentials can receive events and use data-plane operations. `/version` reports the supported desired-state and authentication capabilities.
 
 The production Windows package atomically persists gateway-managed device/tag configuration and desired active state as JSON in `C:\ProgramData\EN-CO OHG\Vision Realtime\state\vision-realtime-state.json`. It restores persisted devices and their desired active state after service or Windows restarts.
-
-Multi-client isolation, per-client pairing and permissions, and configuration-master ownership are planned and must not be presented as available. The current API uses a shared bearer token and globally broadcasts WebSocket events.
 
 ## Native Gateway
 
@@ -48,7 +40,9 @@ cmake -S native -B build/vision-realtime-mock
 cmake --build build/vision-realtime-mock --config Release
 ```
 
-Build the real backend after placing `lib60870-C` at `third_party/lib60870/lib60870-C`:
+Build the real backend after placing `lib60870-C` at `third_party/lib60870/lib60870-C`.
+
+Windows requires CMake, Visual Studio 2026 with the C++ Build Tools, and a Windows SDK:
 
 ```powershell
 Push-Location native
@@ -57,10 +51,23 @@ cmake --build --preset iec104-lib60870-release
 Pop-Location
 ```
 
-Run a development build directly:
+macOS requires CMake and the Xcode Command Line Tools:
+
+```sh
+cmake --preset iec104-lib60870-macos-release -S native
+cmake --build build/vision-realtime-lib60870-macos
+```
+
+Run a Windows development build directly:
 
 ```powershell
 .\build\vision-realtime-lib60870\Release\vision-realtime.exe run --config native\config.example.json
+```
+
+Run a macOS development build directly:
+
+```sh
+./build/vision-realtime-lib60870-macos/vision-realtime run --config native/config.example.json
 ```
 
 Implemented CLI and Windows service commands:
@@ -98,7 +105,7 @@ The Windows package writes the gateway log to `C:\ProgramData\EN-CO OHG\Vision R
 
 ## Licensing Boundary
 
-Vision Realtime is distributed as a separate IEC-104 gateway product by EN-CO OHG. The public `lib60870-C` repository is GPLv3/commercial dual-licensed. A binary built against the public GPLv3 code requires a GPLv3-compatible gateway distribution with matching corresponding source, build material, licenses, and third-party notices. A suitable commercial license from MZ Automation is the alternative for a different distribution model.
+Vision Realtime uses `lib60870-C`, which is GPLv3/commercial dual-licensed by MZ Automation. Binary releases built with the public GPLv3 source require matching source code, build material, licenses, and third-party notices.
 
 Before publishing binary packages, follow [RELEASE_COMPLIANCE.md](RELEASE_COMPLIANCE.md).
 

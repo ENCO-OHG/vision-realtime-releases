@@ -25,7 +25,7 @@ Service logs:   C:\ProgramData\EN-CO OHG\Vision Realtime\logs\service\
 
 `ProgramData` is hidden by default. Never paste secrets such as the gateway token into tickets or logs.
 
-On first installation, setup displays the randomly generated Gateway Token exactly once in a selectable field. Store it securely and enter it as the **Gateway Token** in the client device. Upgrades preserve the existing token and do not display it again; silent installations never display secrets.
+On first installation, setup requests the **Gateway Target ID**, **Controller ID**, and **Controller Generation** displayed in the Vision One IEC-104 device settings. It then displays the randomly generated **Controller Token** exactly once in a selectable field. Store it securely and enter it as the **Gateway Token** in Vision One. Silent installations require `/GATEWAY_TARGET_ID=<uuid>`, `/CONTROLLER_ID=<uuid>`, and `/CONTROLLER_GENERATION=<number>` and never display secrets.
 
 ### 2. Verify the service and diagnostics
 
@@ -53,7 +53,7 @@ Invoke-RestMethod http://127.0.0.1:24104/api/v1/version
 
 `status --config` inspects the resolved configuration and reports the number of persisted devices; `doctor --config` checks configuration, state file, and backend. Use `service status` for the running service and `/health` for API reachability. Production packages report `backend=lib60870`.
 
-Get the status of a configured gateway device (replace device ID and token):
+Get the status of a configured gateway device (replace device ID and controller or operator token):
 
 ```powershell
 $headers = @{ Authorization = "Bearer <gateway-token>" }
@@ -62,25 +62,25 @@ Invoke-RestMethod -Headers $headers http://127.0.0.1:24104/api/v1/devices/<devic
 
 ### 3. Configure the gateway and client
 
-Use the token shown during first installation. If it is needed again for an existing installation, an administrator can read it without changing the configuration:
+Use the controller token shown during first installation. If it is needed again, an administrator can read it without changing the configuration:
 
 ```powershell
 $gatewayConfig = Get-Content "C:\ProgramData\EN-CO OHG\Vision Realtime\config\gateway.json" -Raw | ConvertFrom-Json
-$gatewayConfig.authToken
+$gatewayConfig.credentials.controller.token
 ```
 
 For a client on the same machine use:
 
 ```text
 Gateway URL:    http://127.0.0.1:24104
-Gateway Token:  the same token configured in the gateway
+Gateway Token:  credentials.controller.token
 ```
 
-Create an `IEC104Client` device in the client application. Set the RTU address, RTU port (IEC-104 default: TCP `2404`), common address, and COT/CA/IOA sizes to match the RTU. Add tags with the correct IOA and monitor/command type. Gateway API port `24104` and RTU port `2404` belong to different connections.
+`credentials.controller.gatewayTargetId`, `credentials.controller.controllerId`, and `credentials.controller.controllerGeneration` must exactly match the values shown in Vision One. `credentials.operators` is optional; operator tokens can use events and data-plane operations but cannot replace desired state. Create an `IEC104Client` device in the client application. Set the RTU address, RTU port (IEC-104 default: TCP `2404`), common address, and COT/CA/IOA sizes to match the RTU. Add tags with the correct IOA and monitor/command type. Gateway API port `24104` and RTU port `2404` belong to different connections.
 
 The production package atomically persists gateway device/tag configuration and desired active state as JSON in `C:\ProgramData\EN-CO OHG\Vision Realtime\state\vision-realtime-state.json`. The service loads this file at startup and restores devices and their desired active state after service or Windows restarts. Verify this during commissioning with a test device and `& $exe service restart`.
 
-Multi-client operation, client pairing/permissions, and the configuration-master role are still planned. The current shared bearer token does not provide those features.
+Client pairing and configuration-master transfer are still planned. The implemented controller and operator credentials enforce desired-state replacement separately from data-plane access.
 
 ### 4. Firewall: local or remote
 
@@ -95,7 +95,7 @@ Test-NetConnection <rtu-ip> -Port 2404
 
 The native API currently uses HTTP with a bearer token. Never expose port `24104` to the Internet; use a VPN or controlled TLS termination across remote networks. Do not add a remote rule for local-only operation.
 
-### 5. Logs, upgrade, and removal
+### 5. Logs and removal
 
 Follow the current log:
 
@@ -103,7 +103,7 @@ Follow the current log:
 Get-Content "C:\ProgramData\EN-CO OHG\Vision Realtime\logs\vision-realtime.log" -Tail 100 -Wait
 ```
 
-The gateway rotates `vision-realtime.log` at 1 MB and retains up to five rotated files. WinSW writes separate wrapper logs under `C:\ProgramData\EN-CO OHG\Vision Realtime\logs\service\`. Before an upgrade, back up `config\gateway.json` and `state\vision-realtime-state.json`; run the new installer as Administrator, then verify version, service, health, and one device. A normal in-place upgrade preserves configuration, state, and logs. When replacing the former `VisionOneIec104Gateway` service, setup migrates its token, network configuration, and device state; the old ProgramData remains as a recovery copy initially.
+The gateway rotates `vision-realtime.log` at 1 MB and retains up to five rotated files. WinSW writes separate wrapper logs under `C:\ProgramData\EN-CO OHG\Vision Realtime\logs\service\`.
 
 Standard removal through **Installed apps** removes the program and service but retains configuration, token, device state, and logs for later reinstallation. To remove all data, select **Purge all gateway data from ProgramData** in the uninstaller. For unattended removal run as Administrator:
 
@@ -117,7 +117,7 @@ Standard removal through **Installed apps** removes the program and service but 
 
 - Service does not start: inspect `Get-Service` and Windows Event Viewer, then read the gateway log and run `doctor`.
 - `/health` is unreachable: check service state, listen address, port ownership with `Get-NetTCPConnection -LocalPort 24104`, and firewall rules.
-- HTTP `401`: make the gateway and client tokens identical; avoid copied whitespace.
+- HTTP `401`: verify the controller or operator token and avoid copied whitespace. Desired-state replacement requires the controller token.
 - Device remains `connecting`/`disconnected`: run `Test-NetConnection <rtu-ip> -Port 2404`; verify RTU permission for this master, common address, and COT/CA/IOA sizes.
 - Device state is missing after restart: inspect `state\vision-realtime-state.json`, JSON validity, and `NT AUTHORITY\LocalService` write access to the Vision Realtime `ProgramData` tree; then run `doctor --config $config`.
 - Local remote test succeeds but the client cannot connect: the listen address must not be `127.0.0.1`; check the inbound rule and its `RemoteAddress` restriction.

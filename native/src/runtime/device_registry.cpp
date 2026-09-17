@@ -1,5 +1,7 @@
 #include "device_registry.h"
 
+#include <algorithm>
+
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
 CS104_Connection DeviceRegistry::requestStop(DeviceState& state, std::shared_ptr<std::mutex>& operationMutex) {
     state.stopRequested = true;
@@ -73,10 +75,37 @@ DeviceRegistry::ConfigureResult DeviceRegistry::configure(const std::string& dev
     state.configured = true;
     state.stopRequested = false;
     state.lastError.clear();
+    for (auto it = state.cachedValues.begin(); it != state.cachedValues.end();) {
+        const bool tagStillMatches = std::any_of(tags.begin(), tags.end(), [&](const TagConfig& tag) {
+            return tag.tagId == it->first && tag.ioa == it->second.ioa && tag.deviceDataType == it->second.deviceDataType;
+        });
+        if (!tagStillMatches) it = state.cachedValues.erase(it);
+        else ++it;
+    }
     for (const auto& tag : tags) {
         if (!state.numericValues.contains(tag.tagId)) state.numericValues[tag.tagId] = 0.0;
     }
     return result;
+}
+
+StopWorkerResult DeviceRegistry::remove(const std::string& deviceId) {
+    StopWorkerResult result;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return result;
+#ifdef VISION_ONE_IEC104_WITH_LIB60870
+    result.connectionToClose = requestStop(it->second, result.operationMutex);
+#else
+    requestStop(it->second);
+#endif
+    if (it->second.worker.joinable()) result.worker = std::move(it->second.worker);
+    devices_.erase(it);
+    return result;
+}
+
+bool DeviceRegistry::hasDevice(const std::string& deviceId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return devices_.contains(deviceId);
 }
 
 StopWorkerResult DeviceRegistry::stopWorkerForRestart(const std::string& deviceId) {
@@ -262,6 +291,30 @@ std::string DeviceRegistry::tagIdForIoa(const std::string& deviceId, int ioa) {
         if (tag.ioa == ioa) return tag.tagId;
     }
     return "";
+}
+
+void DeviceRegistry::cacheValue(const std::string& deviceId, const std::string& tagId, int ioa, const std::string& deviceDataType, const std::string& event) {
+    if (tagId.empty()) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return;
+    it->second.cachedValues[tagId] = {.ioa = ioa, .deviceDataType = deviceDataType, .event = event};
+}
+
+std::vector<std::string> DeviceRegistry::cachedValueEvents(const std::string& deviceId) {
+    std::vector<std::string> events;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return events;
+    events.reserve(it->second.cachedValues.size());
+    for (const auto& [_, value] : it->second.cachedValues) events.push_back(value.event);
+    return events;
+}
+
+void DeviceRegistry::clearCachedValues(const std::string& deviceId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = devices_.find(deviceId);
+    if (it != devices_.end()) it->second.cachedValues.clear();
 }
 
 std::vector<MockValueEvent> DeviceRegistry::collectMockValueEvents(const std::string& deviceIdFilter) {

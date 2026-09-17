@@ -71,6 +71,8 @@ public:
     };
 
     ConfigureResult configure(const std::string& deviceId, const std::vector<TagConfig>& tags, const ConnectionConfig& connection);
+    StopWorkerResult remove(const std::string& deviceId);
+    bool hasDevice(const std::string& deviceId);
     StopWorkerResult stopWorkerForRestart(const std::string& deviceId);
 
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
@@ -95,6 +97,9 @@ public:
     WriteSnapshot prepareWrite(const std::string& deviceId, const std::string& tagId, int ioa, double value);
     InterrogateSnapshot prepareInterrogate(const std::string& deviceId);
     std::string tagIdForIoa(const std::string& deviceId, int ioa);
+    void cacheValue(const std::string& deviceId, const std::string& tagId, int ioa, const std::string& deviceDataType, const std::string& event);
+    std::vector<std::string> cachedValueEvents(const std::string& deviceId);
+    void clearCachedValues(const std::string& deviceId);
     std::vector<MockValueEvent> collectMockValueEvents(const std::string& deviceIdFilter = "");
 
 private:
@@ -107,6 +112,12 @@ private:
         ConnectionConfig connectionConfig;
         std::vector<TagConfig> tags;
         std::map<std::string, double> numericValues;
+        struct CachedValue {
+            int ioa = 0;
+            std::string deviceDataType;
+            std::string event;
+        };
+        std::map<std::string, CachedValue> cachedValues;
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
         CS104_Connection connection = nullptr;
         std::uint64_t connectionGeneration = 0;

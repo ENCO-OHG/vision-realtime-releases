@@ -62,7 +62,8 @@ foreach ($requiredFile in @($gatewaySource, $lib60870Source, $winSwSource, $icon
     }
 }
 
-$backendOutput = & $gatewaySource version --json
+$templateConfig = Join-Path $packagingRoot 'windows\gateway.json'
+$backendOutput = & $gatewaySource version --config $templateConfig --json
 if ($LASTEXITCODE -ne 0) {
     throw "Gateway backend inspection failed with exit code $LASTEXITCODE."
 }
@@ -103,7 +104,7 @@ Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\verify-service.ps1') -
 Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\QUICKSTART.txt') -Destination $stageRoot
 Copy-Item -Path (Join-Path $repositoryRoot 'licenses\*') -Destination (Join-Path $stageRoot 'licenses')
 
-$stagedBackendOutput = & (Join-Path $stageRoot 'bin\vision-realtime.exe') version --json
+$stagedBackendOutput = & (Join-Path $stageRoot 'bin\vision-realtime.exe') version --config (Join-Path $stageRoot 'defaults\gateway.json') --json
 if ($LASTEXITCODE -ne 0 -or ($stagedBackendOutput | ConvertFrom-Json).backend -ne 'lib60870') {
     throw 'Production Guard: the staged gateway is not a working lib60870 build.'
 }

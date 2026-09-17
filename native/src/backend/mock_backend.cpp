@@ -17,16 +17,24 @@ BackendResult MockBackend::start(const std::string& deviceId) {
 
 BackendResult MockBackend::stop(const std::string& deviceId) {
     devices_.stopMock(deviceId);
+    devices_.clearCachedValues(deviceId);
+    return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false)}};
+}
+
+BackendResult MockBackend::remove(const std::string& deviceId) {
+    devices_.remove(deviceId);
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false)}};
 }
 
 BackendResult MockBackend::status(const std::string& deviceId) {
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto state = devices_.status(deviceId);
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"gatewayConnected\":true,\"iec104Connected\":" + (state.running ? "true" : "false") + ",\"state\":\"" + (state.running ? "running" : "off") + "\"}"};
 }
 
 BackendResult MockBackend::write(const std::string& deviceId, const WriteRequest& request) {
     if (request.requestId.empty()) return {.status = 400, .body = "{\"ok\":false,\"error\":\"missing-request-id\"}"};
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto write = devices_.prepareWrite(deviceId, request.tagId, request.ioa, request.value);
     if (!write.connected) return {.status = 409, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"not-connected\"}"};
     if (!write.found) return {.status = 404, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"unknown-ioa\"}"};
@@ -39,6 +47,7 @@ BackendResult MockBackend::write(const std::string& deviceId, const WriteRequest
 
 BackendResult MockBackend::interrogate(const std::string& deviceId, int qualifier) {
     (void)qualifier;
+    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     if (!devices_.prepareInterrogate(deviceId).connected) return {.status = 409, .body = "{\"ok\":false,\"error\":\"not-connected\"}"};
     BackendResult result{.status = 200, .body = "{\"ok\":true}"};
     for (const auto& event : devices_.collectMockValueEvents(deviceId)) {

@@ -160,8 +160,11 @@ IF(UNIX)
     target_link_libraries (lib60870
         -lpthread
         -lm
-        -lrt
     )
+
+    if (NOT APPLE)
+        target_link_libraries(lib60870 -lrt)
+    endif()
 
   configure_file(
     ${CMAKE_CURRENT_LIST_DIR}/lib60870.pc.in
