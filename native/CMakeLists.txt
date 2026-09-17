@@ -138,4 +138,30 @@ if (BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/src/runtime"
     )
     add_test(NAME vision-realtime-state-store-tests COMMAND vision-realtime-state-store-tests)
+
+    add_test(NAME vision-realtime-version COMMAND vision-realtime --version)
+    set_tests_properties(vision-realtime-version PROPERTIES PASS_REGULAR_EXPRESSION "Vision Realtime ${VISION_REALTIME_FULL_VERSION}")
+
+    if (VISION_REALTIME_WITH_LIB60870)
+        add_executable(vision-realtime-lib60870-shutdown-tests
+            src/tests/lib60870_shutdown_tests.cpp
+            src/api/json_utils.cpp
+            src/backend/command_tracker.cpp
+            src/backend/lib60870_backend.cpp
+            src/runtime/device_registry.cpp
+        )
+        target_compile_features(vision-realtime-lib60870-shutdown-tests PRIVATE cxx_std_20)
+        target_compile_definitions(vision-realtime-lib60870-shutdown-tests PRIVATE VISION_ONE_IEC104_WITH_LIB60870=1)
+        target_include_directories(vision-realtime-lib60870-shutdown-tests PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}/src/api"
+            "${CMAKE_CURRENT_LIST_DIR}/src/backend"
+            "${CMAKE_CURRENT_LIST_DIR}/src/runtime"
+            "${VISION_REALTIME_LIB60870_DIR}/config"
+            "${VISION_REALTIME_LIB60870_DIR}/src/inc/api"
+            "${VISION_REALTIME_LIB60870_DIR}/src/hal/inc"
+            "${VISION_REALTIME_LIB60870_DIR}/src/common/inc"
+        )
+        target_link_libraries(vision-realtime-lib60870-shutdown-tests PRIVATE lib60870)
+        add_test(NAME vision-realtime-lib60870-shutdown-tests COMMAND vision-realtime-lib60870-shutdown-tests)
+    endif()
 endif()

@@ -183,6 +183,16 @@ void closeStoppedConnection(const StopWorkerResult& stoppedWorker) {
     CS104_Connection_close(stoppedWorker.connectionToClose);
 }
 
+void destroyStoppedConnection(const StopWorkerResult& stoppedWorker) {
+    if (!stoppedWorker.connectionToClose) return;
+    if (stoppedWorker.operationMutex) {
+        std::lock_guard<std::mutex> operationLock(*stoppedWorker.operationMutex);
+        CS104_Connection_destroy(stoppedWorker.connectionToClose);
+        return;
+    }
+    CS104_Connection_destroy(stoppedWorker.connectionToClose);
+}
+
 bool asduReceivedHandler(void* parameter, int, CS101_ASDU asdu) {
     auto* context = static_cast<CallbackContext*>(parameter);
     if (!context || !context->backend) return true;
@@ -235,6 +245,7 @@ BackendResult Lib60870Backend::configure(const std::string& deviceId, const std:
     auto configured = devices_.configure(deviceId, tags, connection);
     closeStoppedConnection(configured.stoppedWorker);
     if (configured.stoppedWorker.worker.joinable()) configured.stoppedWorker.worker.join();
+    destroyStoppedConnection(configured.stoppedWorker);
     if (configured.restartAfterConfig) {
         logSink_("IEC104 restarting device=" + deviceId + " remote=" + connection.remoteAddress + ":" + std::to_string(connection.remotePort));
         devices_.startRealWorker(deviceId, std::thread(&Lib60870Backend::realBackendLoop, this, deviceId));
@@ -248,6 +259,7 @@ BackendResult Lib60870Backend::start(const std::string& deviceId) {
     auto stoppedWorker = devices_.stopWorkerForRestart(deviceId);
     closeStoppedConnection(stoppedWorker);
     if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
+    destroyStoppedConnection(stoppedWorker);
     if (!devices_.isConfigured(deviceId)) return {.status = 409, .body = "{\"ok\":false,\"error\":\"not-configured\"}"};
     logSink_("IEC104 start device=" + deviceId);
     if (!devices_.startRealWorker(deviceId, std::thread(&Lib60870Backend::realBackendLoop, this, deviceId))) return {.status = 409, .body = "{\"ok\":false,\"error\":\"not-configured\"}"};
@@ -258,6 +270,7 @@ BackendResult Lib60870Backend::stop(const std::string& deviceId) {
     auto stoppedWorker = devices_.stopRealWorker(deviceId);
     closeStoppedConnection(stoppedWorker);
     if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
+    destroyStoppedConnection(stoppedWorker);
     devices_.finishRealStop(deviceId);
     devices_.clearCachedValues(deviceId);
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false, "off")}};
@@ -267,19 +280,22 @@ BackendResult Lib60870Backend::remove(const std::string& deviceId) {
     auto stoppedWorker = devices_.remove(deviceId);
     closeStoppedConnection(stoppedWorker);
     if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
+    destroyStoppedConnection(stoppedWorker);
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, false, "off")}};
 }
 
 BackendResult Lib60870Backend::status(const std::string& deviceId) {
-    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto state = devices_.status(deviceId);
+    if (state.lookupState == DeviceLookupState::Missing) return {.status = 404, .body = "{\"ok\":false,\"error\":\"unknown-device\"}"};
+    if (state.lookupState == DeviceLookupState::Reconciling) return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"gatewayConnected\":true,\"iec104Connected\":false,\"state\":\"reconciling\",\"lastError\":\"\"}"};
     std::string runtimeState = state.running ? (state.realConnected ? "running" : "connecting") : "off";
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"gatewayConnected\":true,\"iec104Connected\":" + (state.realConnected ? "true" : "false") + ",\"state\":\"" + runtimeState + "\",\"lastError\":\"" + jsonEscape(state.lastError) + "\"}"};
 }
 
 BackendResult Lib60870Backend::write(const std::string& deviceId, const WriteRequest& request) {
-    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto write = devices_.prepareWrite(deviceId, request.tagId, request.ioa, request.value);
+    if (write.lookupState == DeviceLookupState::Missing) return {.status = 404, .body = "{\"ok\":false,\"error\":\"unknown-device\"}"};
+    if (write.lookupState == DeviceLookupState::Reconciling) return {.status = 409, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"device_reconciling\"}"};
     if (!write.connected) return {.status = 409, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"not-connected\"}"};
     if (!write.found) return {.status = 404, .body = "{\"ok\":false,\"requestId\":\"" + jsonEscape(request.requestId) + "\",\"error\":\"unknown-ioa\"}"};
     if (request.requestId.empty()) return {.status = 400, .body = "{\"ok\":false,\"error\":\"missing-request-id\"}"};
@@ -342,8 +358,9 @@ BackendResult Lib60870Backend::write(const std::string& deviceId, const WriteReq
 }
 
 BackendResult Lib60870Backend::interrogate(const std::string& deviceId, int qualifier) {
-    if (!devices_.hasDevice(deviceId)) return {.status = 404, .body = "{\"ok\":false,\"error\":\"not-found\"}"};
     auto interrogation = devices_.prepareInterrogate(deviceId);
+    if (interrogation.lookupState == DeviceLookupState::Missing) return {.status = 404, .body = "{\"ok\":false,\"error\":\"unknown-device\"}"};
+    if (interrogation.lookupState == DeviceLookupState::Reconciling) return {.status = 409, .body = "{\"ok\":false,\"error\":\"device_reconciling\"}"};
     if (!interrogation.connected) return {.status = 409, .body = "{\"ok\":false,\"error\":\"not-connected\"}"};
     bool sent = false;
     logSink_("IEC104 manual interrogation device=" + deviceId + " ca=" + std::to_string(interrogation.commonAddress) + " qoi=" + std::to_string(qualifier) + " sending");
@@ -391,7 +408,12 @@ void Lib60870Backend::realBackendLoop(std::string deviceId) {
         CS104_Connection_setConnectionHandler(connection, connectionHandler, &callbackContext);
         CS104_Connection_setASDUReceivedHandler(connection, asduReceivedHandler, &callbackContext);
         CS104_Connection_setConnectTimeout(connection, cfg.timeoutMs);
-        auto operationMutex = devices_.setConnection(deviceId, connection, connectionGeneration);
+        auto registeredOperationMutex = devices_.setConnection(deviceId, connection, connectionGeneration);
+        if (!registeredOperationMutex) {
+            CS104_Connection_destroy(connection);
+            break;
+        }
+        const auto operationMutex = *registeredOperationMutex;
 
         bool connected = false;
         {
@@ -453,8 +475,10 @@ void Lib60870Backend::realBackendLoop(std::string deviceId) {
 
         {
             std::lock_guard<std::mutex> operationLock(*operationMutex);
-            if (devices_.clearConnectionIfMatches(deviceId, connection)) CS104_Connection_close(connection);
-            CS104_Connection_destroy(connection);
+            if (devices_.clearConnectionIfMatches(deviceId, connection)) {
+                CS104_Connection_close(connection);
+                CS104_Connection_destroy(connection);
+            }
         }
         commands_.unblockAfterDisconnect(deviceId, connectionGeneration);
         eventSink_(statusEvent(deviceId, false, "disconnected"));

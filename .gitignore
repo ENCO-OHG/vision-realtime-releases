@@ -10,3 +10,6 @@ Thumbs.db
 /native/build*/
 /packaging/build/
 /packaging/dist/
+
+/native/config.json
+/vision-realtime-state.json

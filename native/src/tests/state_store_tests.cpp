@@ -113,6 +113,49 @@ void removedDeviceNoLongerHasStatus() {
     require(backend.status("device-1").status == 404, "removed device remained in the registry");
 }
 
+void stoppedDeviceRemainsStoppedUntilExplicitStart() {
+    DeviceRegistry registry;
+    MockBackend backend(registry);
+    ConnectionConfig connection;
+    backend.configure("device-1", {}, connection);
+    backend.start("device-1");
+    require(registry.status("device-1").running, "started device was not running");
+
+    backend.stop("device-1");
+    require(!registry.status("device-1").running, "stopped device remained running");
+
+    backend.start("device-1");
+    require(registry.status("device-1").running, "explicit start did not resume the stopped device");
+}
+
+void reconcilingDevicesRejectDataPlaneRequestsWithoutCreatingGhostDevices() {
+    DeviceRegistry registry;
+    MockBackend backend(registry);
+    ConnectionConfig connection;
+    const TagConfig tag{.tagId = "tag-1", .ioa = 17, .deviceDataType = "M_SP_NA_1"};
+    backend.configure("device-1", {tag}, connection);
+    backend.configure("device-2", {tag}, connection);
+    backend.start("device-1");
+    backend.start("device-2");
+
+    registry.beginReconcile({"device-1"});
+    const auto status = backend.status("device-1");
+    require(status.status == 200 && status.body.find("\"state\":\"reconciling\"") != std::string::npos, "reconciling device did not report its reconciliation state");
+    const auto write = backend.write("device-1", {.requestId = "request-1", .tagId = tag.tagId, .ioa = tag.ioa, .value = 1.0});
+    require(write.status == 409 && write.body.find("device_reconciling") != std::string::npos, "reconciling device accepted a write");
+    const auto interrogation = backend.interrogate("device-1", 20);
+    require(interrogation.status == 409 && interrogation.body.find("device_reconciling") != std::string::npos, "reconciling device accepted an interrogation");
+
+    const auto unaffectedWrite = backend.write("device-2", {.requestId = "request-2", .tagId = tag.tagId, .ioa = tag.ioa, .value = 2.0});
+    require(unaffectedWrite.status == 200, "unaffected device was blocked during reconciliation");
+    registry.endReconcile({"device-1"});
+
+    const auto missingStatus = backend.status("missing-device");
+    require(missingStatus.status == 404 && missingStatus.body.find("unknown-device") != std::string::npos, "missing device status did not return unknown-device");
+    const auto missingWrite = backend.write("missing-device", {.requestId = "request-3", .ioa = tag.ioa, .value = 3.0});
+    require(missingWrite.status == 404 && !registry.hasDevice("missing-device"), "missing device write created a ghost device");
+}
+
 void cachedValuesReplayOnlyMatchingConfiguredTags() {
     DeviceRegistry registry;
     ConnectionConfig connection;
@@ -158,6 +201,8 @@ int main() {
         staleFenceIsRejected();
         desiredStateRejectsUnexpectedFields();
         removedDeviceNoLongerHasStatus();
+        stoppedDeviceRemainsStoppedUntilExplicitStart();
+        reconcilingDevicesRejectDataPlaneRequestsWithoutCreatingGhostDevices();
         cachedValuesReplayOnlyMatchingConfiguredTags();
         std::cout << "state store tests passed\n";
         return 0;

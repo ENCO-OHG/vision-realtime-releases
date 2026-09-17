@@ -55,7 +55,8 @@ Implemented:
 
 ```text
 vision-realtime [run] [--config <json>] [options]
-vision-realtime version|status|doctor [--config <json>] [--json]
+vision-realtime version|--version
+vision-realtime status|doctor [--config <json>] [--json]
 vision-realtime service install|start|stop|restart|status|uninstall
 ```
 

@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,13 +24,21 @@ struct MockValueEvent {
     double value = 0.0;
 };
 
+enum class DeviceLookupState {
+    Available,
+    Missing,
+    Reconciling,
+};
+
 struct DeviceStatusSnapshot {
+    DeviceLookupState lookupState = DeviceLookupState::Missing;
     bool running = false;
     bool realConnected = false;
     std::string lastError;
 };
 
 struct WriteSnapshot {
+    DeviceLookupState lookupState = DeviceLookupState::Missing;
     bool connected = false;
     bool found = false;
     TagConfig tag;
@@ -43,6 +52,7 @@ struct WriteSnapshot {
 };
 
 struct InterrogateSnapshot {
+    DeviceLookupState lookupState = DeviceLookupState::Missing;
     bool connected = false;
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
     CS104_Connection connection = nullptr;
@@ -73,6 +83,8 @@ public:
     ConfigureResult configure(const std::string& deviceId, const std::vector<TagConfig>& tags, const ConnectionConfig& connection);
     StopWorkerResult remove(const std::string& deviceId);
     bool hasDevice(const std::string& deviceId);
+    void beginReconcile(const std::vector<std::string>& deviceIds);
+    void endReconcile(const std::vector<std::string>& deviceIds);
     StopWorkerResult stopWorkerForRestart(const std::string& deviceId);
 
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
@@ -83,7 +95,7 @@ public:
     std::optional<ConnectionConfig> runningConnectionConfig(const std::string& deviceId);
     bool shouldContinueRunning(const std::string& deviceId);
     bool shouldReconnect(const std::string& deviceId);
-    std::shared_ptr<std::mutex> setConnection(const std::string& deviceId, CS104_Connection connection, std::uint64_t connectionGeneration);
+    std::optional<std::shared_ptr<std::mutex>> setConnection(const std::string& deviceId, CS104_Connection connection, std::uint64_t connectionGeneration);
     bool isCurrentConnection(const std::string& deviceId, CS104_Connection connection, std::uint64_t connectionGeneration);
     bool clearConnectionIfMatches(const std::string& deviceId, CS104_Connection connection);
     void markConnected(const std::string& deviceId);
@@ -136,4 +148,5 @@ private:
 
     std::mutex mutex_;
     std::map<std::string, DeviceState> devices_;
+    std::set<std::string> reconcilingDeviceIds_;
 };

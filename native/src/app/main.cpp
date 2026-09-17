@@ -63,6 +63,42 @@ constexpr int LOG_MAX_FILES = 5;
 constexpr const char* LOG_FILE_NAME = "vision-realtime.log";
 constexpr int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
+bool samePersistedDevice(const PersistedDevice& a, const PersistedDevice& b) {
+    DesiredState left;
+    left.devices = {a};
+    DesiredState right;
+    right.devices = {b};
+    return desiredStateHash(left) == desiredStateHash(right);
+}
+
+std::vector<std::string> affectedDeviceIds(const std::vector<PersistedDevice>& previous, const std::vector<PersistedDevice>& desired) {
+    std::vector<std::string> affected;
+    for (const auto& oldDevice : previous) {
+        const auto next = std::find_if(desired.begin(), desired.end(), [&](const auto& device) { return device.deviceId == oldDevice.deviceId; });
+        if (next == desired.end() || !samePersistedDevice(oldDevice, *next)) affected.push_back(oldDevice.deviceId);
+    }
+    for (const auto& nextDevice : desired) {
+        const auto old = std::find_if(previous.begin(), previous.end(), [&](const auto& device) { return device.deviceId == nextDevice.deviceId; });
+        if (old == previous.end()) affected.push_back(nextDevice.deviceId);
+    }
+    return affected;
+}
+
+class ReconcileMarker {
+public:
+    ReconcileMarker(DeviceRegistry& devices, std::vector<std::string> deviceIds) : devices_(devices), deviceIds_(std::move(deviceIds)) {
+        devices_.beginReconcile(deviceIds_);
+    }
+
+    ~ReconcileMarker() {
+        devices_.endReconcile(deviceIds_);
+    }
+
+private:
+    DeviceRegistry& devices_;
+    std::vector<std::string> deviceIds_;
+};
+
 enum class CliCommand {
     Run,
     Version,
@@ -269,6 +305,7 @@ void broadcast(const std::string& event) {
     g_broadcaster.broadcast(event);
 }
 
+#ifndef VISION_ONE_IEC104_WITH_LIB60870
 void valueLoop() {
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -277,6 +314,7 @@ void valueLoop() {
         }
     }
 }
+#endif
 
 void broadcastResultEvents(const BackendResult& result) {
     for (const auto& event : result.events) broadcast(event);
@@ -447,10 +485,13 @@ std::string handleApi(const HttpRequest& req) {
         if (!committed) {
             return httpResponse(200, "{\"ok\":true,\"committed\":false,\"converged\":true,\"revision\":" + std::to_string(desired.revision) + ",\"hash\":\"" + desired.hash + "\",\"requestId\":\"" + jsonEscape(desired.requestId) + "\"}");
         }
+        const auto affected = affectedDeviceIds(previous, desired.devices);
+        ReconcileMarker reconcilingDevices(g_devices, affected);
         for (const auto& device : previous) {
             if (std::none_of(desired.devices.begin(), desired.devices.end(), [&](const auto& next) { return next.deviceId == device.deviceId; })) broadcastResultEvents(g_backend->remove(device.deviceId));
         }
         for (const auto& device : desired.devices) {
+            if (std::find(affected.begin(), affected.end(), device.deviceId) == affected.end()) continue;
             auto configured = g_backend->configure(device.deviceId, device.tags, device.connection);
             broadcastResultEvents(configured);
             auto running = device.desiredState == "running" ? g_backend->start(device.deviceId) : g_backend->stop(device.deviceId);
@@ -678,7 +719,8 @@ void printHelp() {
         << "\n"
         << "Usage:\n"
         << "  vision-realtime [run] [--config <json>] [options]\n"
-        << "  vision-realtime version|status|doctor [--config <json>] [--json]\n"
+        << "  vision-realtime version|--version\n"
+        << "  vision-realtime status|doctor [--config <json>] [--json]\n"
         << "  vision-realtime service install|start|stop|restart|status|uninstall\n"
         << "\nOptions:\n"
         << "  --listen <address> --port <port>\n"
@@ -697,7 +739,7 @@ CliOptions parseArgs(int argc, char** argv) {
         if (first == "run") {
             options.command = CliCommand::Run;
             start = 2;
-        } else if (first == "version") {
+        } else if (first == "version" || first == "--version") {
             options.command = CliCommand::Version;
             start = 2;
         } else if (first == "status") {
@@ -922,8 +964,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (options.command == CliCommand::Service) return runServiceCommand(options.serviceAction);
-        resolveConfig(options);
         if (options.command == CliCommand::Version) return printVersion(options.json);
+        resolveConfig(options);
         if (options.command == CliCommand::Status) return printOfflineStatus(options);
         if (options.command == CliCommand::Doctor) return printDoctor(options);
         return runGateway(options.gateway);

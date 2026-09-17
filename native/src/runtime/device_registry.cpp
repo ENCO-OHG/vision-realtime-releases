@@ -108,6 +108,16 @@ bool DeviceRegistry::hasDevice(const std::string& deviceId) {
     return devices_.contains(deviceId);
 }
 
+void DeviceRegistry::beginReconcile(const std::vector<std::string>& deviceIds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    reconcilingDeviceIds_.insert(deviceIds.begin(), deviceIds.end());
+}
+
+void DeviceRegistry::endReconcile(const std::vector<std::string>& deviceIds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& deviceId : deviceIds) reconcilingDeviceIds_.erase(deviceId);
+}
+
 StopWorkerResult DeviceRegistry::stopWorkerForRestart(const std::string& deviceId) {
     StopWorkerResult result;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -173,10 +183,10 @@ bool DeviceRegistry::shouldReconnect(const std::string& deviceId) {
     return shouldContinueRunning(deviceId);
 }
 
-std::shared_ptr<std::mutex> DeviceRegistry::setConnection(const std::string& deviceId, CS104_Connection connection, std::uint64_t connectionGeneration) {
+std::optional<std::shared_ptr<std::mutex>> DeviceRegistry::setConnection(const std::string& deviceId, CS104_Connection connection, std::uint64_t connectionGeneration) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = devices_.find(deviceId);
-    if (it == devices_.end()) return std::make_shared<std::mutex>();
+    if (it == devices_.end() || !it->second.configured || !it->second.running || it->second.stopRequested) return std::nullopt;
     it->second.connection = connection;
     it->second.connectionGeneration = connectionGeneration;
     return it->second.operationMutex;
@@ -227,14 +237,23 @@ void DeviceRegistry::stopMock(const std::string& deviceId) {
 
 DeviceStatusSnapshot DeviceRegistry::status(const std::string& deviceId) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto& state = devices_[deviceId];
-    return {.running = state.running, .realConnected = state.realConnected, .lastError = state.lastError};
+    if (reconcilingDeviceIds_.contains(deviceId)) return {.lookupState = DeviceLookupState::Reconciling};
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return {};
+    return {.lookupState = DeviceLookupState::Available, .running = it->second.running, .realConnected = it->second.realConnected, .lastError = it->second.lastError};
 }
 
 WriteSnapshot DeviceRegistry::prepareWrite(const std::string& deviceId, const std::string& tagId, int ioa, double value) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto& state = devices_[deviceId];
     WriteSnapshot snapshot;
+    if (reconcilingDeviceIds_.contains(deviceId)) {
+        snapshot.lookupState = DeviceLookupState::Reconciling;
+        return snapshot;
+    }
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return snapshot;
+    auto& state = it->second;
+    snapshot.lookupState = DeviceLookupState::Available;
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
     snapshot.connected = state.running && state.realConnected && state.connection != nullptr;
     snapshot.connection = state.connection;
@@ -269,8 +288,15 @@ WriteSnapshot DeviceRegistry::prepareWrite(const std::string& deviceId, const st
 
 InterrogateSnapshot DeviceRegistry::prepareInterrogate(const std::string& deviceId) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto& state = devices_[deviceId];
     InterrogateSnapshot snapshot;
+    if (reconcilingDeviceIds_.contains(deviceId)) {
+        snapshot.lookupState = DeviceLookupState::Reconciling;
+        return snapshot;
+    }
+    auto it = devices_.find(deviceId);
+    if (it == devices_.end()) return snapshot;
+    auto& state = it->second;
+    snapshot.lookupState = DeviceLookupState::Available;
 #ifdef VISION_ONE_IEC104_WITH_LIB60870
     snapshot.connected = state.running && state.realConnected && state.connection != nullptr;
     snapshot.connection = state.connection;
