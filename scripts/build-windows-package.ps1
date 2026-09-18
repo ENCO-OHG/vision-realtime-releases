@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$MakensisPath,
-    [string]$NativeBuildDir
+    [string]$NativeBuildDir,
+    [switch]$StageOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,6 +108,11 @@ Copy-Item -Path (Join-Path $repositoryRoot 'licenses\*') -Destination (Join-Path
 $stagedBackendOutput = & (Join-Path $stageRoot 'bin\vision-realtime.exe') version --config (Join-Path $stageRoot 'defaults\gateway.json') --json
 if ($LASTEXITCODE -ne 0 -or ($stagedBackendOutput | ConvertFrom-Json).backend -ne 'lib60870') {
     throw 'Production Guard: the staged gateway is not a working lib60870 build.'
+}
+
+if ($StageOnly) {
+    Write-Host "Staged Windows package inputs: $stageRoot"
+    return
 }
 
 $servicePackageName = "vision-realtime-$($gatewayInfo.version)-windows-x64-service.zip"

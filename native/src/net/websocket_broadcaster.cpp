@@ -8,6 +8,16 @@ void WebSocketBroadcaster::addClient(socket_t socket) {
     clients_.push_back(socket);
 }
 
+bool WebSocketBroadcaster::addClientWithSnapshot(socket_t socket, const std::function<std::vector<std::string>()>& snapshotFactory) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto snapshot = snapshotFactory();
+    for (const auto& event : snapshot) {
+        if (!sendText(socket, event)) return false;
+    }
+    clients_.push_back(socket);
+    return true;
+}
+
 void WebSocketBroadcaster::removeClient(socket_t socket) {
     std::lock_guard<std::mutex> lock(mutex_);
     clients_.erase(std::remove(clients_.begin(), clients_.end(), socket), clients_.end());

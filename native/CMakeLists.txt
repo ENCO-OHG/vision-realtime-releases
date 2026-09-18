@@ -148,6 +148,7 @@ if (BUILD_TESTING)
             src/api/json_utils.cpp
             src/backend/command_tracker.cpp
             src/backend/lib60870_backend.cpp
+            src/net/socket_utils.cpp
             src/runtime/device_registry.cpp
         )
         target_compile_features(vision-realtime-lib60870-shutdown-tests PRIVATE cxx_std_20)
@@ -155,6 +156,7 @@ if (BUILD_TESTING)
         target_include_directories(vision-realtime-lib60870-shutdown-tests PRIVATE
             "${CMAKE_CURRENT_LIST_DIR}/src/api"
             "${CMAKE_CURRENT_LIST_DIR}/src/backend"
+            "${CMAKE_CURRENT_LIST_DIR}/src/net"
             "${CMAKE_CURRENT_LIST_DIR}/src/runtime"
             "${VISION_REALTIME_LIB60870_DIR}/config"
             "${VISION_REALTIME_LIB60870_DIR}/src/inc/api"
@@ -162,6 +164,9 @@ if (BUILD_TESTING)
             "${VISION_REALTIME_LIB60870_DIR}/src/common/inc"
         )
         target_link_libraries(vision-realtime-lib60870-shutdown-tests PRIVATE lib60870)
+        if (WIN32)
+            target_link_libraries(vision-realtime-lib60870-shutdown-tests PRIVATE ws2_32)
+        endif()
         add_test(NAME vision-realtime-lib60870-shutdown-tests COMMAND vision-realtime-lib60870-shutdown-tests)
     endif()
 endif()

@@ -172,6 +172,16 @@ void cachedValuesReplayOnlyMatchingConfiguredTags() {
     require(registry.cachedValueEvents("device-1").empty(), "cached values were not cleared");
 }
 
+void repeatedStartDoesNotRestartAnAlreadyRunningDevice() {
+    DeviceRegistry registry;
+    MockBackend backend(registry);
+    ConnectionConfig connection;
+    backend.configure("device-1", {}, connection);
+    backend.start("device-1");
+    const auto repeatedStart = backend.start("device-1");
+    require(repeatedStart.status == 200 && repeatedStart.body.find("alreadyRunning") != std::string::npos, "repeated start restarted an already running device");
+}
+
 void invalidStateReportsItsPath() {
     const auto path = std::filesystem::temp_directory_path() / "vision-realtime-invalid-state-test.json";
     {
@@ -204,6 +214,7 @@ int main() {
         stoppedDeviceRemainsStoppedUntilExplicitStart();
         reconcilingDevicesRejectDataPlaneRequestsWithoutCreatingGhostDevices();
         cachedValuesReplayOnlyMatchingConfiguredTags();
+        repeatedStartDoesNotRestartAnAlreadyRunningDevice();
         std::cout << "state store tests passed\n";
         return 0;
     } catch (const std::exception& e) {

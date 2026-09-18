@@ -11,6 +11,10 @@ BackendResult MockBackend::configure(const std::string& deviceId, const std::vec
 }
 
 BackendResult MockBackend::start(const std::string& deviceId) {
+    const auto status = devices_.status(deviceId);
+    if (status.lookupState == DeviceLookupState::Available && status.running) {
+        return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"alreadyRunning\":true}"};
+    }
     devices_.startMock(deviceId);
     return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\"}", .events = {statusEvent(deviceId, true)}};
 }

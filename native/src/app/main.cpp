@@ -417,13 +417,10 @@ bool handleWebSocket(socket_t socket, const HttpRequest& req) {
 
     g_broadcaster.sendText(socket, std::string("{\"type\":\"gateway\",\"ok\":true,\"version\":\"") + jsonEscape(VISION_ONE_IEC104_GATEWAY_VERSION) + "\"}");
     const std::string deviceId = eventDeviceId(req.path);
-    for (const auto& event : g_devices.cachedValueEvents(deviceId)) {
-        if (!g_broadcaster.sendText(socket, event)) {
-            closeSocket(socket);
-            return true;
-        }
+    if (!g_broadcaster.addClientWithSnapshot(socket, [&]() { return g_devices.cachedValueEvents(deviceId); })) {
+        closeSocket(socket);
+        return true;
     }
-    g_broadcaster.addClient(socket);
 
     std::array<char, 2> frameHeader{};
     while (g_running) {

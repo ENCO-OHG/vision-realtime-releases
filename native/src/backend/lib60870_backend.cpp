@@ -256,6 +256,10 @@ BackendResult Lib60870Backend::configure(const std::string& deviceId, const std:
 }
 
 BackendResult Lib60870Backend::start(const std::string& deviceId) {
+    const auto status = devices_.status(deviceId);
+    if (status.lookupState == DeviceLookupState::Available && status.running) {
+        return {.status = 200, .body = "{\"ok\":true,\"deviceId\":\"" + jsonEscape(deviceId) + "\",\"alreadyRunning\":true}"};
+    }
     auto stoppedWorker = devices_.stopWorkerForRestart(deviceId);
     closeStoppedConnection(stoppedWorker);
     if (stoppedWorker.worker.joinable()) stoppedWorker.worker.join();
@@ -415,11 +419,9 @@ void Lib60870Backend::realBackendLoop(std::string deviceId) {
         }
         const auto operationMutex = *registeredOperationMutex;
 
-        bool connected = false;
-        {
-            std::lock_guard<std::mutex> operationLock(*operationMutex);
-            connected = CS104_Connection_connect(connection);
-        }
+        // connect blocks until the lib60870 connection thread succeeds or fails.
+        // Do not hold this mutex so stop() can close the connection and unblock it.
+        const bool connected = CS104_Connection_connect(connection);
         if (connected) {
             {
                 std::lock_guard<std::mutex> operationLock(*operationMutex);
