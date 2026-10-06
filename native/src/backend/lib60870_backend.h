@@ -30,7 +30,7 @@ public:
     std::vector<std::string> pollEvents() override;
 
     void logAsduReceived(const std::string& deviceId, TypeID type, CS101_CauseOfTransmission cot, int ca, int count);
-    void emitValue(const std::string& deviceId, int ioa, const std::string& asduType, double value, uint8_t quality, uint64_t timestampMs, CS101_CauseOfTransmission cot);
+    void emitValue(const std::string& deviceId, int ioa, const std::string& asduType, double value, uint8_t quality, uint64_t sourceTimestampMs, CS101_CauseOfTransmission cot, bool sourceTimestampPresent, bool sourceTimestampValid, bool sourceTimestampSubstituted, bool sourceTimestampSummerTime);
     void handleCommandConfirmation(const CommandConfirmation& confirmation);
     void handleConnectionEvent(const std::string& deviceId, std::uint64_t connectionGeneration, CS104_ConnectionEvent event);
 

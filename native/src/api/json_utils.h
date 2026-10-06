@@ -50,6 +50,6 @@ std::string statusEvent(const std::string& deviceId, bool running);
 std::string statusEvent(const std::string& deviceId, bool connected, const std::string& state, const std::string& lastError = "");
 std::string qualityJson(uint8_t quality);
 std::string valueEvent(const std::string& deviceId, const TagConfig& tag, double value);
-std::string valueEvent(const std::string& deviceId, int ioa, const std::string& tagId, const std::string& asduType, double value, uint8_t quality, uint64_t timestampMs = 0, int cot = 0);
+std::string valueEvent(const std::string& deviceId, int ioa, const std::string& tagId, const std::string& asduType, double value, uint8_t quality, uint64_t sourceTimestampMs = 0, int cot = 0, bool sourceTimestampPresent = false, bool sourceTimestampValid = false, bool sourceTimestampSubstituted = false, bool sourceTimestampSummerTime = false);
 std::string writeResultEvent(const std::string& deviceId, const std::string& requestId, const TagConfig& tag);
 std::string writeResultEvent(const std::string& deviceId, const std::string& requestId, const TagConfig& tag, bool ok, const std::string& cause, const std::string& error, const std::string& phase, int cot);

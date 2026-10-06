@@ -172,6 +172,18 @@ void cachedValuesReplayOnlyMatchingConfiguredTags() {
     require(registry.cachedValueEvents("device-1").empty(), "cached values were not cleared");
 }
 
+void valueEventsExposeTimestampAndRawQualityMetadata() {
+    const auto invalidTime = valueEvent("device-1", 17, "tag-1", "M_SP_TB_1", 1.0, 0xa0, 1234, 3, true, false, true, true);
+    require(invalidTime.find("\"timestamp\":") != std::string::npos && invalidTime.find("\"sourceTimestamp\":0") != std::string::npos, "invalid source timestamp was exposed");
+    require(invalidTime.find("\"timestampSource\":\"rtu\"") != std::string::npos && invalidTime.find("\"timestampValid\":false") != std::string::npos && invalidTime.find("\"timestampInvalid\":true") != std::string::npos, "invalid timestamp metadata differs");
+    require(invalidTime.find("\"timestampSubstituted\":true") != std::string::npos && invalidTime.find("\"timestampSummerTime\":true") != std::string::npos, "CP56 timestamp flags differ");
+    require(invalidTime.find("\"raw\":160") != std::string::npos, "raw quality is absent");
+
+    const auto validTime = valueEvent("device-1", 17, "tag-1", "M_SP_TB_1", 1.0, 0, 1234, 3, true, true);
+    require(validTime.find("\"timestamp\":1234") != std::string::npos && validTime.find("\"sourceTimestamp\":1234") != std::string::npos, "valid source timestamp differs");
+    require(validTime.find("\"timestampSource\":\"rtu\"") != std::string::npos && validTime.find("\"timestampValid\":true") != std::string::npos, "valid timestamp metadata differs");
+}
+
 void repeatedStartDoesNotRestartAnAlreadyRunningDevice() {
     DeviceRegistry registry;
     MockBackend backend(registry);
@@ -214,6 +226,7 @@ int main() {
         stoppedDeviceRemainsStoppedUntilExplicitStart();
         reconcilingDevicesRejectDataPlaneRequestsWithoutCreatingGhostDevices();
         cachedValuesReplayOnlyMatchingConfiguredTags();
+        valueEventsExposeTimestampAndRawQualityMetadata();
         repeatedStartDoesNotRestartAnAlreadyRunningDevice();
         std::cout << "state store tests passed\n";
         return 0;

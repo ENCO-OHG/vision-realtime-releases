@@ -363,7 +363,8 @@ std::string statusEvent(const std::string& deviceId, bool connected, const std::
 
 std::string qualityJson(uint8_t quality) {
     std::ostringstream out;
-    out << "{\"invalid\":" << ((quality & 0x80) ? "true" : "false")
+    out << "{\"raw\":" << static_cast<unsigned int>(quality)
+        << ",\"invalid\":" << ((quality & 0x80) ? "true" : "false")
         << ",\"notTopical\":" << ((quality & 0x40) ? "true" : "false")
         << ",\"substituted\":" << ((quality & 0x20) ? "true" : "false")
         << ",\"blocked\":" << ((quality & 0x10) ? "true" : "false")
@@ -375,14 +376,26 @@ std::string valueEvent(const std::string& deviceId, const TagConfig& tag, double
     return valueEvent(deviceId, tag.ioa, tag.tagId, tag.deviceDataType, value, 0, 0, 3);
 }
 
-std::string valueEvent(const std::string& deviceId, int ioa, const std::string& tagId, const std::string& asduType, double value, uint8_t quality, uint64_t timestampMs, int cot) {
+std::string valueEvent(const std::string& deviceId, int ioa, const std::string& tagId, const std::string& asduType, double value, uint8_t quality, uint64_t sourceTimestampMs, int cot, bool sourceTimestampPresent, bool sourceTimestampValid, bool sourceTimestampSubstituted, bool sourceTimestampSummerTime) {
     auto nowMillis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    uint64_t millis = timestampMs > 0 ? timestampMs : static_cast<uint64_t>(nowMillis);
+    const uint64_t receivedTimestampMs = static_cast<uint64_t>(nowMillis);
+    const bool hasValidSourceTimestamp = sourceTimestampValid && sourceTimestampMs > 0;
+    const uint64_t legacyTimestampMs = hasValidSourceTimestamp ? sourceTimestampMs : receivedTimestampMs;
     std::ostringstream out;
     out << "{\"type\":\"value\",\"deviceId\":\"" << jsonEscape(deviceId)
         << "\",\"tagId\":\"" << jsonEscape(tagId) << "\",\"ioa\":" << ioa
         << ",\"asduType\":\"" << jsonEscape(asduType) << "\",\"value\":" << value
-        << ",\"quality\":" << qualityJson(quality) << ",\"cot\":" << cot << ",\"timestamp\":" << millis << "}";
+        << ",\"quality\":" << qualityJson(quality) << ",\"cot\":" << cot
+        << ",\"timestamp\":" << legacyTimestampMs
+        << ",\"sourceTimestamp\":";
+    if (hasValidSourceTimestamp) out << sourceTimestampMs;
+    else out << "0";
+    out << ",\"receivedTimestamp\":" << receivedTimestampMs
+        << ",\"timestampSource\":\"" << (sourceTimestampPresent ? "rtu" : "none") << "\""
+        << ",\"timestampValid\":" << (sourceTimestampValid ? "true" : "false")
+		<< ",\"timestampInvalid\":" << (sourceTimestampPresent && !sourceTimestampValid ? "true" : "false")
+        << ",\"timestampSubstituted\":" << (sourceTimestampSubstituted ? "true" : "false")
+        << ",\"timestampSummerTime\":" << (sourceTimestampSummerTime ? "true" : "false") << "}";
     return out.str();
 }
 

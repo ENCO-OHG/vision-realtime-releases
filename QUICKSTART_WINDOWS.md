@@ -38,7 +38,7 @@ $exe = "C:\Program Files\EN-CO OHG\Vision Realtime\bin\vision-realtime.exe"
 & $exe service restart
 ```
 
-`service install|start|stop|restart|status|uninstall` is implemented and delegates to the `VisionRealtime.exe` WinSW wrapper. The service ID and display name are `VisionRealtime`; administrative actions require an elevated PowerShell. Setup, the installed application, and the uninstall entry use the Vision Realtime app icon.
+`service install|start|stop|restart|status|uninstall` is implemented and delegates to the `VisionRealtime.exe` WinSW wrapper. The service ID and display name are `VisionRealtime`; the service starts automatically during normal Windows startup. Administrative actions require an elevated PowerShell. Setup, the installed application, and the uninstall entry use the Vision Realtime app icon.
 
 Check the CLI and local HTTP API:
 

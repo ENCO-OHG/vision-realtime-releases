@@ -90,7 +90,7 @@ C:\ProgramData\EN-CO OHG\Vision Realtime\logs\service\
 
 Program binaries, WinSW wrapper/configuration, licenses, and notices are installed under `Program Files`. Mutable configuration, controller/operator credential material, atomic JSON device state, and logs are stored under the exact `ProgramData` paths above. The installer, executable, and Windows uninstall entry use the Vision Realtime app icon.
 
-WinSW registers and supervises service ID `VisionRealtime` through SCM, starts it automatically with delayed auto-start, and runs it as `NT AUTHORITY\LocalService`. The gateway CLI's implemented `service install|start|stop|restart|status|uninstall` commands delegate to `VisionRealtime.exe`. Service recovery restarts unexpected failures without creating a second gateway process. The installer grants LocalService modify access to the Vision Realtime `ProgramData` tree.
+WinSW registers and supervises service ID `VisionRealtime` through SCM, starts it automatically during normal Windows startup, and runs it as `NT AUTHORITY\LocalService`. The gateway CLI's implemented `service install|start|stop|restart|status|uninstall` commands delegate to `VisionRealtime.exe`. Service recovery restarts unexpected failures without creating a second gateway process. The installer grants LocalService modify access to the Vision Realtime `ProgramData` tree.
 
 Default network policy:
 

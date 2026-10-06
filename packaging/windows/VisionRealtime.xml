@@ -6,7 +6,7 @@
   <arguments>run --config "%ProgramData%\EN-CO OHG\Vision Realtime\config\gateway.json" --log-dir "%ProgramData%\EN-CO OHG\Vision Realtime\logs" --no-color</arguments>
   <workingdirectory>%BASE%</workingdirectory>
   <startmode>Automatic</startmode>
-  <delayedAutoStart>true</delayedAutoStart>
+  <delayedAutoStart>false</delayedAutoStart>
   <serviceaccount>
     <domain>NT AUTHORITY</domain>
     <user>LocalService</user>

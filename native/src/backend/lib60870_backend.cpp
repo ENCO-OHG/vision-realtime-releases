@@ -31,8 +31,8 @@ std::string typeName(TypeID type) {
     return name ? std::string(name) : std::to_string(static_cast<int>(type));
 }
 
-uint64_t cp56LocalTimeToUtcMs(CP56Time2a timestamp) {
-    if (!timestamp) return 0;
+uint64_t cp56LocalTimeToEpochMs(CP56Time2a timestamp) {
+    if (!timestamp || CP56Time2a_isInvalid(timestamp)) return 0;
 
     std::tm localTime{};
     localTime.tm_sec = CP56Time2a_getSecond(timestamp);
@@ -48,9 +48,22 @@ uint64_t cp56LocalTimeToUtcMs(CP56Time2a timestamp) {
     return static_cast<uint64_t>(seconds) * 1000ULL + static_cast<uint64_t>(CP56Time2a_getMillisecond(timestamp));
 }
 
-bool decodeInformationObject(TypeID type, InformationObject io, double& value, uint8_t& quality, uint64_t& timestampMs) {
+void decodeCp56Timestamp(CP56Time2a timestamp, uint64_t& timestampMs, bool& timestampPresent, bool& timestampValid, bool& timestampSubstituted, bool& timestampSummerTime) {
+	if (!timestamp) return;
+	timestampPresent = true;
+    timestampSubstituted = CP56Time2a_isSubstituted(timestamp);
+    timestampSummerTime = CP56Time2a_isSummerTime(timestamp);
+    timestampMs = cp56LocalTimeToEpochMs(timestamp);
+    timestampValid = !CP56Time2a_isInvalid(timestamp) && timestampMs > 0;
+}
+
+bool decodeInformationObject(TypeID type, InformationObject io, double& value, uint8_t& quality, uint64_t& timestampMs, bool& timestampPresent, bool& timestampValid, bool& timestampSubstituted, bool& timestampSummerTime) {
     quality = 0;
-    timestampMs = 0;
+	timestampMs = 0;
+	timestampPresent = false;
+    timestampValid = false;
+    timestampSubstituted = false;
+    timestampSummerTime = false;
     switch (type) {
         case M_SP_NA_1:
             value = SinglePointInformation_getValue((SinglePointInformation)io) ? 1.0 : 0.0;
@@ -59,7 +72,7 @@ bool decodeInformationObject(TypeID type, InformationObject io, double& value, u
         case M_SP_TB_1:
             value = SinglePointInformation_getValue((SinglePointInformation)io) ? 1.0 : 0.0;
             quality = SinglePointInformation_getQuality((SinglePointInformation)io);
-            timestampMs = cp56LocalTimeToUtcMs(SinglePointWithCP56Time2a_getTimestamp((SinglePointWithCP56Time2a)io));
+			decodeCp56Timestamp(SinglePointWithCP56Time2a_getTimestamp((SinglePointWithCP56Time2a)io), timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
             return true;
         case M_DP_NA_1:
             value = DoublePointInformation_getValue((DoublePointInformation)io);
@@ -68,7 +81,7 @@ bool decodeInformationObject(TypeID type, InformationObject io, double& value, u
         case M_DP_TB_1:
             value = DoublePointInformation_getValue((DoublePointInformation)io);
             quality = DoublePointInformation_getQuality((DoublePointInformation)io);
-            timestampMs = cp56LocalTimeToUtcMs(DoublePointWithCP56Time2a_getTimestamp((DoublePointWithCP56Time2a)io));
+			decodeCp56Timestamp(DoublePointWithCP56Time2a_getTimestamp((DoublePointWithCP56Time2a)io), timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
             return true;
         case M_ME_NA_1:
             value = MeasuredValueNormalized_getValue((MeasuredValueNormalized)io);
@@ -77,7 +90,7 @@ bool decodeInformationObject(TypeID type, InformationObject io, double& value, u
         case M_ME_TD_1:
             value = MeasuredValueNormalized_getValue((MeasuredValueNormalized)io);
             quality = MeasuredValueNormalized_getQuality((MeasuredValueNormalized)io);
-            timestampMs = cp56LocalTimeToUtcMs(MeasuredValueNormalizedWithCP56Time2a_getTimestamp((MeasuredValueNormalizedWithCP56Time2a)io));
+			decodeCp56Timestamp(MeasuredValueNormalizedWithCP56Time2a_getTimestamp((MeasuredValueNormalizedWithCP56Time2a)io), timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
             return true;
         case M_ME_NB_1:
             value = MeasuredValueScaled_getValue((MeasuredValueScaled)io);
@@ -86,7 +99,7 @@ bool decodeInformationObject(TypeID type, InformationObject io, double& value, u
         case M_ME_TE_1:
             value = MeasuredValueScaled_getValue((MeasuredValueScaled)io);
             quality = MeasuredValueScaled_getQuality((MeasuredValueScaled)io);
-            timestampMs = cp56LocalTimeToUtcMs(MeasuredValueScaledWithCP56Time2a_getTimestamp((MeasuredValueScaledWithCP56Time2a)io));
+			decodeCp56Timestamp(MeasuredValueScaledWithCP56Time2a_getTimestamp((MeasuredValueScaledWithCP56Time2a)io), timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
             return true;
         case M_ME_NC_1:
             value = MeasuredValueShort_getValue((MeasuredValueShort)io);
@@ -95,7 +108,7 @@ bool decodeInformationObject(TypeID type, InformationObject io, double& value, u
         case M_ME_TF_1:
             value = MeasuredValueShort_getValue((MeasuredValueShort)io);
             quality = MeasuredValueShort_getQuality((MeasuredValueShort)io);
-            timestampMs = cp56LocalTimeToUtcMs(MeasuredValueShortWithCP56Time2a_getTimestamp((MeasuredValueShortWithCP56Time2a)io));
+			decodeCp56Timestamp(MeasuredValueShortWithCP56Time2a_getTimestamp((MeasuredValueShortWithCP56Time2a)io), timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
             return true;
         default:
             return false;
@@ -206,10 +219,14 @@ bool asduReceivedHandler(void* parameter, int, CS101_ASDU asdu) {
         if (!io) continue;
         int ioa = InformationObject_getObjectAddress(io);
         double value = 0.0;
-        uint8_t quality = 0;
-        uint64_t timestampMs = 0;
-        if (decodeInformationObject(type, io, value, quality, timestampMs)) {
-            context->backend->emitValue(context->deviceId, ioa, typeName(type), value, quality, timestampMs, cot);
+		uint8_t quality = 0;
+		uint64_t timestampMs = 0;
+		bool timestampPresent = false;
+		bool timestampValid = false;
+        bool timestampSubstituted = false;
+        bool timestampSummerTime = false;
+		if (decodeInformationObject(type, io, value, quality, timestampMs, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime)) {
+			context->backend->emitValue(context->deviceId, ioa, typeName(type), value, quality, timestampMs, cot, timestampPresent, timestampValid, timestampSubstituted, timestampSummerTime);
         } else {
             CommandFingerprint fingerprint;
             bool select = false;
@@ -540,11 +557,11 @@ void Lib60870Backend::logAsduReceived(const std::string& deviceId, TypeID type, 
     logSink_("IEC104 asdu device=" + deviceId + " type=" + typeName(type) + " cot=" + std::to_string(static_cast<int>(cot)) + " ca=" + std::to_string(ca) + " count=" + std::to_string(count));
 }
 
-void Lib60870Backend::emitValue(const std::string& deviceId, int ioa, const std::string& asduType, double value, uint8_t quality, uint64_t timestampMs, CS101_CauseOfTransmission cot) {
+void Lib60870Backend::emitValue(const std::string& deviceId, int ioa, const std::string& asduType, double value, uint8_t quality, uint64_t sourceTimestampMs, CS101_CauseOfTransmission cot, bool sourceTimestampPresent, bool sourceTimestampValid, bool sourceTimestampSubstituted, bool sourceTimestampSummerTime) {
     std::string tagId = devices_.tagIdForIoa(deviceId, ioa);
     logSink_("IEC104 value device=" + deviceId + " ioa=" + std::to_string(ioa) + " type=" + asduType + " value=" + std::to_string(value) + " quality=" + std::to_string(quality) + " tagId=" + (tagId.empty() ? "<unmatched>" : tagId));
-    const std::string event = valueEvent(deviceId, ioa, tagId, asduType, value, quality, timestampMs, static_cast<int>(cot));
-    if ((quality & 0x80) == 0) devices_.cacheValue(deviceId, tagId, ioa, asduType, event);
+	const std::string event = valueEvent(deviceId, ioa, tagId, asduType, value, quality, sourceTimestampMs, static_cast<int>(cot), sourceTimestampPresent, sourceTimestampValid, sourceTimestampSubstituted, sourceTimestampSummerTime);
+    devices_.cacheValue(deviceId, tagId, ioa, asduType, event);
     eventSink_(event);
 }
 

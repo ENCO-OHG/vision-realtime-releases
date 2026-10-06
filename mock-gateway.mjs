@@ -55,6 +55,29 @@ function broadcast(event) {
   }
 }
 
+function valueEvent({ deviceId, tagId, ioa, asduType, value, quality = 0, cot, receivedTimestamp = Date.now() }) {
+  return {
+    type: 'value', deviceId, tagId, ioa, asduType, value,
+    quality: {
+      raw: quality,
+      invalid: Boolean(quality & 0x80),
+      notTopical: Boolean(quality & 0x40),
+      substituted: Boolean(quality & 0x20),
+      blocked: Boolean(quality & 0x10),
+      overflow: Boolean(quality & 0x01),
+    },
+    cot,
+    // The mock has no RTU clock, so its legacy timestamp is the gateway receipt time.
+    timestamp: receivedTimestamp,
+    sourceTimestamp: 0,
+    receivedTimestamp,
+    timestampSource: 'gateway',
+    timestampValid: false,
+    timestampSubstituted: false,
+    timestampSummerTime: false,
+  };
+}
+
 function getDevice(deviceId) {
   let state = devices.get(deviceId);
   if (!state) {
@@ -97,17 +120,7 @@ function emitValues(deviceId, cot = 3) {
     const current = state.values.has(tag.tagId) ? state.values.get(tag.tagId) : defaultValue(tag, now);
     const value = typeof current === 'number' ? Number((current + 0.1).toFixed(3)) : current;
     state.values.set(tag.tagId, value);
-    broadcast({
-      type: 'value',
-      deviceId,
-      tagId: tag.tagId,
-      ioa: tag.ioa,
-      asduType: tag.deviceDataType,
-      value,
-      quality: { invalid: false, notTopical: false, substituted: false, blocked: false, overflow: false },
-      cot,
-      timestamp: now,
-    });
+    broadcast(valueEvent({ deviceId, tagId: tag.tagId, ioa: tag.ioa, asduType: tag.deviceDataType, value, cot, receivedTimestamp: now }));
   }
 }
 
@@ -201,7 +214,7 @@ const server = http.createServer(async (req, res) => {
         const tag = tags.find((entry) => body.tagId && entry.tagId === body.tagId) ?? tags.find((entry) => entry.ioa === body.ioa);
         if (tag) {
           state.values.set(tag.tagId, body.value);
-          broadcast({ type: 'value', deviceId, tagId: tag.tagId, ioa: tag.ioa, asduType: tag.deviceDataType, value: body.value, quality: { invalid: false }, cot: 3, timestamp: Date.now() });
+          broadcast(valueEvent({ deviceId, tagId: tag.tagId, ioa: tag.ioa, asduType: tag.deviceDataType, value: body.value, cot: 3 }));
         }
       }, 50);
       return;
