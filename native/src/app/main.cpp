@@ -56,12 +56,19 @@ std::unique_ptr<StateStore> g_stateStore;
 std::mutex g_logMutex;
 std::mutex g_clientsMutex;
 std::mutex g_desiredStateMutex;
-std::vector<std::thread> g_clientThreads;
+
+struct ClientWorker {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> finished;
+};
+
+std::vector<ClientWorker> g_clientThreads;
 
 constexpr std::uintmax_t LOG_MAX_BYTES = 1024 * 1024;
 constexpr int LOG_MAX_FILES = 5;
 constexpr const char* LOG_FILE_NAME = "vision-realtime.log";
 constexpr int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+constexpr std::size_t MAX_CLIENT_CONNECTIONS = 64;
 
 bool samePersistedDevice(const PersistedDevice& a, const PersistedDevice& b) {
     DesiredState left;
@@ -595,13 +602,43 @@ void installSignalHandlers() {
 #endif
 }
 
+void reapClients() {
+    std::vector<std::thread> completed;
+    {
+        std::lock_guard<std::mutex> lock(g_clientsMutex);
+        for (auto it = g_clientThreads.begin(); it != g_clientThreads.end();) {
+            if (!it->finished->load()) {
+                ++it;
+                continue;
+            }
+            completed.push_back(std::move(it->thread));
+            it = g_clientThreads.erase(it);
+        }
+    }
+    for (auto& client : completed) if (client.joinable()) client.join();
+}
+
 void joinClients() {
-    std::vector<std::thread> clients;
+    std::vector<ClientWorker> clients;
     {
         std::lock_guard<std::mutex> lock(g_clientsMutex);
         clients = std::move(g_clientThreads);
     }
-    for (auto& client : clients) if (client.joinable()) client.join();
+    for (auto& client : clients) if (client.thread.joinable()) client.thread.join();
+}
+
+bool startClient(socket_t socket) {
+    const auto finished = std::make_shared<std::atomic<bool>>(false);
+    std::lock_guard<std::mutex> lock(g_clientsMutex);
+    if (g_clientThreads.size() >= MAX_CLIENT_CONNECTIONS) return false;
+    g_clientThreads.push_back({
+        std::thread([socket, finished] {
+            handleClient(socket);
+            finished->store(true);
+        }),
+        finished,
+    });
+    return true;
 }
 
 void stopPersistedDevices() {
@@ -872,6 +909,7 @@ int runGateway(const GatewayConfig& config) {
 #endif
 
     while (g_running && !g_shutdownRequested) {
+        reapClients();
         fd_set readable;
         FD_ZERO(&readable);
         FD_SET(server, &readable);
@@ -892,8 +930,7 @@ int runGateway(const GatewayConfig& config) {
         socket_t client = accept(server, reinterpret_cast<sockaddr*>(&clientAddr), &len);
         if (client == invalid_socket_value) continue;
         setClientTimeout(client);
-        std::lock_guard<std::mutex> lock(g_clientsMutex);
-        g_clientThreads.emplace_back(handleClient, client);
+        if (!startClient(client)) closeSocket(client);
     }
 
     g_running = false;
