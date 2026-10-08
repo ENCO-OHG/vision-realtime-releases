@@ -29,6 +29,87 @@ The API uses local bearer-token credentials. The controller credential is requir
 
 The production Windows package atomically persists gateway-managed device/tag configuration and desired active state as JSON in `C:\ProgramData\EN-CO OHG\Vision Realtime\state\vision-realtime-state.json`. It restores persisted devices and their desired active state after service or Windows restarts.
 
+## Value Event Contract And Timestamp Semantics
+
+`WS /api/v1/events` emits one JSON event per supported IEC-104 monitoring
+information object. The native gateway emits the following additive `value`
+event contract:
+
+```json
+{
+  "type": "value",
+  "deviceId": "device-id",
+  "tagId": "tag-id",
+  "ioa": 1001,
+  "asduType": "M_ME_TF_1",
+  "value": 12.5,
+  "quality": {
+    "raw": 0,
+    "invalid": false,
+    "notTopical": false,
+    "substituted": false,
+    "blocked": false,
+    "overflow": false
+  },
+  "cot": 3,
+  "timestamp": 1735689600000,
+  "sourceTimestamp": 1735689600000,
+  "receivedTimestamp": 1735689600123,
+  "timestampSource": "rtu",
+  "timestampValid": true,
+  "timestampInvalid": false,
+  "timestampSubstituted": false,
+  "timestampSummerTime": false
+}
+```
+
+`deviceId`, `ioa`, `value`, and `cot` identify the received IEC-104 value.
+`tagId` and `asduType` identify the configured tag and received ASDU type when
+available. The gateway preserves the numeric COT without assigning live,
+historical, delayed, replayed, or backfill semantics to it. Consumers decide
+how values affect their own current-state and historical processing.
+
+### Quality
+
+`quality.raw` preserves the IEC quality descriptor byte. The native gateway
+also expands its defined bits into booleans:
+
+| Field | QDS bit | Meaning |
+| --- | --- | --- |
+| `invalid` | `0x80` | Invalid value |
+| `notTopical` | `0x40` | Not topical |
+| `substituted` | `0x20` | Substituted value |
+| `blocked` | `0x10` | Blocked value |
+| `overflow` | `0x01` | Overflow |
+
+### Timestamps
+
+All timestamps are Unix epoch milliseconds.
+
+- `receivedTimestamp` is generated when Vision Realtime creates the JSON
+  event. It is the gateway receipt time.
+- A valid CP56Time2a timestamp sets both `sourceTimestamp` and the legacy
+  compatibility field `timestamp` to the RTU event time. `timestampSource` is
+  `"rtu"` and `timestampValid` is `true`.
+- Without a CP56Time2a timestamp, `sourceTimestamp` is `0`, `timestamp` is
+  the gateway receipt time, `timestampSource` is `"none"`, and
+  `timestampValid` is `false`.
+- With a present but invalid CP56Time2a timestamp, `sourceTimestamp` is `0`,
+  `timestamp` is the gateway receipt time, `timestampSource` remains `"rtu"`,
+  `timestampValid` is `false`, and `timestampInvalid` is `true`.
+- `timestampSubstituted` and `timestampSummerTime` preserve the corresponding
+  CP56Time2a flags. A substituted but valid timestamp remains a source
+  timestamp.
+
+CP56Time2a is converted using the gateway host local timezone and its
+summer-time indication. Consumers must retain this interpretation for
+compatible event-time handling. `receivedTimestamp` describes delivery time
+and is not a substitute for a missing RTU source timestamp.
+
+Consumers that support older gateways must tolerate events that only carry the
+legacy `timestamp` field. The native contract above is authoritative; gateway
+mocks must reproduce it for production-equivalent tests.
+
 ## Native Gateway
 
 `native/` contains the C++20 implementation. The default developer build uses a dependency-free mock backend. A production-capable build must enable the real backend with `VISION_REALTIME_WITH_LIB60870=ON`; mock backend builds must not be shipped for production RTUs. The full macOS workflow is documented in [QUICKSTART_MACOS.md](QUICKSTART_MACOS.md).

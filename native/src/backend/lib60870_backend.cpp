@@ -379,6 +379,7 @@ BackendResult Lib60870Backend::write(const std::string& deviceId, const WriteReq
 }
 
 BackendResult Lib60870Backend::interrogate(const std::string& deviceId, int qualifier) {
+    if (!isSupportedInterrogationQualifier(qualifier)) return {.status = 400, .body = "{\"ok\":false,\"error\":\"invalid-qualifier\"}"};
     auto interrogation = devices_.prepareInterrogate(deviceId);
     if (interrogation.lookupState == DeviceLookupState::Missing) return {.status = 404, .body = "{\"ok\":false,\"error\":\"unknown-device\"}"};
     if (interrogation.lookupState == DeviceLookupState::Reconciling) return {.status = 409, .body = "{\"ok\":false,\"error\":\"device_reconciling\"}"};

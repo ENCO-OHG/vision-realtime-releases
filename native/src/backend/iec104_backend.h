@@ -19,6 +19,10 @@ struct WriteRequest {
     bool select = false;
 };
 
+inline bool isSupportedInterrogationQualifier(int qualifier) {
+    return qualifier >= 20 && qualifier <= 36;
+}
+
 class Iec104Backend {
 public:
     virtual ~Iec104Backend() = default;

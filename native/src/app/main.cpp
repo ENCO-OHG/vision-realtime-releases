@@ -525,7 +525,13 @@ std::string handleApi(const HttpRequest& req) {
     }
 
     if (action == "interrogate" && req.method == "POST") {
+        const auto request = parseJson(req.body.empty() ? "{}" : req.body);
+        const auto* qualifierField = request.find("qualifier");
+        if (qualifierField && (!qualifierField->number() || std::floor(*qualifierField->number()) != *qualifierField->number() || *qualifierField->number() < 20 || *qualifierField->number() > 36)) {
+            return httpResponse(400, "{\"ok\":false,\"error\":\"invalid-qualifier\"}");
+        }
         int qualifier = jsonIntField(req.body, "qualifier", 20);
+        if (!isSupportedInterrogationQualifier(qualifier)) return httpResponse(400, "{\"ok\":false,\"error\":\"invalid-qualifier\"}");
         auto result = g_backend->interrogate(deviceId, qualifier);
         broadcastResultEvents(result);
         return httpResponse(result.status, result.body);

@@ -173,6 +173,18 @@ void cachedValuesReplayOnlyMatchingConfiguredTags() {
 }
 
 void valueEventsExposeTimestampAndRawQualityMetadata() {
+    const auto noCp56 = valueEvent("device-1", 17, "tag-1", "M_SP_NA_1", 1.0, 0, 0, 3);
+    require(noCp56.find("\"raw\":0") != std::string::npos && noCp56.find("\"invalid\":false") != std::string::npos && noCp56.find("\"notTopical\":false") != std::string::npos && noCp56.find("\"substituted\":false") != std::string::npos && noCp56.find("\"blocked\":false") != std::string::npos && noCp56.find("\"overflow\":false") != std::string::npos, "complete good quality metadata differs");
+    require(noCp56.find("\"sourceTimestamp\":0") != std::string::npos && noCp56.find("\"timestampSource\":\"none\"") != std::string::npos && noCp56.find("\"timestampValid\":false") != std::string::npos && noCp56.find("\"timestampInvalid\":false") != std::string::npos, "no-CP56 timestamp metadata differs");
+
+    const auto combinedQuality = valueEvent("device-1", 17, "tag-1", "M_SP_NA_1", 1.0, 0xf1, 0, 3);
+    require(combinedQuality.find("\"raw\":241") != std::string::npos && combinedQuality.find("\"invalid\":true") != std::string::npos && combinedQuality.find("\"notTopical\":true") != std::string::npos && combinedQuality.find("\"substituted\":true") != std::string::npos && combinedQuality.find("\"blocked\":true") != std::string::npos && combinedQuality.find("\"overflow\":true") != std::string::npos, "combined quality metadata differs");
+
+    for (const auto& [quality, field] : std::initializer_list<std::pair<uint8_t, const char*>>{{0x80, "invalid"}, {0x40, "notTopical"}, {0x20, "substituted"}, {0x10, "blocked"}, {0x01, "overflow"}}) {
+        const auto event = valueEvent("device-1", 17, "tag-1", "M_SP_NA_1", 1.0, quality, 0, 3);
+        require(event.find("\"" + std::string(field) + "\":true") != std::string::npos, "individual quality flag differs");
+    }
+
     const auto invalidTime = valueEvent("device-1", 17, "tag-1", "M_SP_TB_1", 1.0, 0xa0, 1234, 3, true, false, true, true);
     require(invalidTime.find("\"timestamp\":") != std::string::npos && invalidTime.find("\"sourceTimestamp\":0") != std::string::npos, "invalid source timestamp was exposed");
     require(invalidTime.find("\"timestampSource\":\"rtu\"") != std::string::npos && invalidTime.find("\"timestampValid\":false") != std::string::npos && invalidTime.find("\"timestampInvalid\":true") != std::string::npos, "invalid timestamp metadata differs");
@@ -182,6 +194,26 @@ void valueEventsExposeTimestampAndRawQualityMetadata() {
     const auto validTime = valueEvent("device-1", 17, "tag-1", "M_SP_TB_1", 1.0, 0, 1234, 3, true, true);
     require(validTime.find("\"timestamp\":1234") != std::string::npos && validTime.find("\"sourceTimestamp\":1234") != std::string::npos, "valid source timestamp differs");
     require(validTime.find("\"timestampSource\":\"rtu\"") != std::string::npos && validTime.find("\"timestampValid\":true") != std::string::npos, "valid timestamp metadata differs");
+
+    const auto zeroSource = valueEvent("device-1", 17, "tag-1", "M_SP_TB_1", 1.0, 0, 0, 3, true, true);
+    require(zeroSource.find("\"sourceTimestamp\":0") != std::string::npos && zeroSource.find("\"timestampValid\":false") != std::string::npos && zeroSource.find("\"timestampInvalid\":true") != std::string::npos, "zero source timestamp must not be valid");
+}
+
+void mockInterrogationPreservesQualifier() {
+    DeviceRegistry registry;
+    MockBackend backend(registry);
+    ConnectionConfig connection;
+    const TagConfig tag{.tagId = "tag-1", .ioa = 17, .deviceDataType = "M_SP_NA_1"};
+    backend.configure("device-1", {tag}, connection);
+    backend.start("device-1");
+
+    for (const int qualifier : {20, 21, 36}) {
+        const auto result = backend.interrogate("device-1", qualifier);
+        require(result.status == 200 && result.events.size() == 1 && result.events[0].find("\"cot\":" + std::to_string(qualifier)) != std::string::npos, "mock interrogation COT differs");
+    }
+
+    const auto invalid = backend.interrogate("device-1", 19);
+    require(invalid.status == 400 && invalid.body.find("invalid-qualifier") != std::string::npos, "mock accepted an invalid interrogation qualifier");
 }
 
 void repeatedStartDoesNotRestartAnAlreadyRunningDevice() {
@@ -227,6 +259,7 @@ int main() {
         reconcilingDevicesRejectDataPlaneRequestsWithoutCreatingGhostDevices();
         cachedValuesReplayOnlyMatchingConfiguredTags();
         valueEventsExposeTimestampAndRawQualityMetadata();
+        mockInterrogationPreservesQualifier();
         repeatedStartDoesNotRestartAnAlreadyRunningDevice();
         std::cout << "state store tests passed\n";
         return 0;

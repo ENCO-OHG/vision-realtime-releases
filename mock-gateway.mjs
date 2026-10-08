@@ -4,11 +4,12 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
-const { WebSocketServer } = require('../../server/node_modules/ws');
+const { WebSocketServer } = require('../vision-one/server/node_modules/ws');
 
 const port = Number(process.env.IEC104_GATEWAY_PORT ?? 24104);
 const listenAddress = process.env.IEC104_GATEWAY_LISTEN ?? '127.0.0.1';
 const authToken = process.env.IEC104_GATEWAY_TOKEN ?? '';
+const testEventsEnabled = process.env.IEC104_GATEWAY_TEST_EVENTS === '1';
 const gatewayVersion = readGatewayVersion();
 
 const devices = new Map();
@@ -55,7 +56,24 @@ function broadcast(event) {
   }
 }
 
-function valueEvent({ deviceId, tagId, ioa, asduType, value, quality = 0, cot, receivedTimestamp = Date.now() }) {
+function valueEvent({
+  deviceId,
+  tagId,
+  ioa,
+  asduType,
+  value,
+  quality = 0,
+  cot,
+  receivedTimestamp = Date.now(),
+  sourceTimestamp = 0,
+  timestampPresent = false,
+  timestampValid = false,
+  timestampSubstituted = false,
+  timestampSummerTime = false,
+}) {
+  if (!Number.isInteger(quality) || quality < 0 || quality > 0xff) throw new Error('invalid-quality');
+  if (!Number.isFinite(receivedTimestamp) || receivedTimestamp <= 0) throw new Error('invalid-received-timestamp');
+  const hasValidSourceTimestamp = timestampPresent && timestampValid && Number.isFinite(sourceTimestamp) && sourceTimestamp > 0;
   return {
     type: 'value', deviceId, tagId, ioa, asduType, value,
     quality: {
@@ -67,15 +85,20 @@ function valueEvent({ deviceId, tagId, ioa, asduType, value, quality = 0, cot, r
       overflow: Boolean(quality & 0x01),
     },
     cot,
-    // The mock has no RTU clock, so its legacy timestamp is the gateway receipt time.
-    timestamp: receivedTimestamp,
-    sourceTimestamp: 0,
+    timestamp: hasValidSourceTimestamp ? sourceTimestamp : receivedTimestamp,
+    sourceTimestamp: hasValidSourceTimestamp ? sourceTimestamp : 0,
     receivedTimestamp,
-    timestampSource: 'gateway',
-    timestampValid: false,
-    timestampSubstituted: false,
-    timestampSummerTime: false,
+    timestampSource: timestampPresent ? 'rtu' : 'none',
+    timestampValid: hasValidSourceTimestamp,
+    timestampInvalid: timestampPresent && !hasValidSourceTimestamp,
+    timestampSubstituted: Boolean(timestampSubstituted),
+    timestampSummerTime: Boolean(timestampSummerTime),
   };
+}
+
+function interrogationQualifier(body) {
+  if (body.qualifier === undefined) return 20;
+  return Number.isInteger(body.qualifier) && body.qualifier >= 20 && body.qualifier <= 36 ? body.qualifier : null;
 }
 
 function getDevice(deviceId) {
@@ -152,7 +175,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const match = path.match(/^\/api\/v1\/devices\/([^/]+)(?:\/(config|start|stop|status|write|interrogate))$/);
+    const match = path.match(/^\/api\/v1\/devices\/([^/]+)(?:\/(config|start|stop|status|write|interrogate|mock-value))$/);
     if (!match) {
       sendJson(res, 404, { ok: false, error: 'not-found' });
       return;
@@ -190,8 +213,46 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 409, { ok: false, error: 'not-connected' });
         return;
       }
+      const qualifier = interrogationQualifier(await readJson(req));
+      if (qualifier === null) {
+        sendJson(res, 400, { ok: false, error: 'invalid-qualifier' });
+        return;
+      }
       sendJson(res, 200, { ok: true });
-      setTimeout(() => emitValues(deviceId, 20), 0);
+      setTimeout(() => emitValues(deviceId, qualifier), 0);
+      return;
+    }
+
+    if (action === 'mock-value' && method === 'POST' && testEventsEnabled) {
+      const body = await readJson(req);
+      const tags = state.config?.tags ?? [];
+      const tag = tags.find((entry) => body.tagId && entry.tagId === body.tagId) ?? tags.find((entry) => entry.ioa === body.ioa);
+      if (!tag) {
+        sendJson(res, 404, { ok: false, error: 'unknown-ioa' });
+        return;
+      }
+      try {
+        const event = valueEvent({
+          deviceId,
+          tagId: tag.tagId,
+          ioa: tag.ioa,
+          asduType: tag.deviceDataType,
+          value: body.value,
+          quality: body.quality ?? 0,
+          cot: body.cot ?? 3,
+          receivedTimestamp: body.receivedTimestamp ?? Date.now(),
+          sourceTimestamp: body.sourceTimestamp ?? 0,
+          timestampPresent: body.timestampPresent === true,
+          timestampValid: body.timestampValid === true,
+          timestampSubstituted: body.timestampSubstituted === true,
+          timestampSummerTime: body.timestampSummerTime === true,
+        });
+        state.values.set(tag.tagId, body.value);
+        broadcast(event);
+        sendJson(res, 200, { ok: true });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error?.message ?? String(error) });
+      }
       return;
     }
 

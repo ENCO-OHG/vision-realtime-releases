@@ -52,7 +52,7 @@ BackendResult MockBackend::write(const std::string& deviceId, const WriteRequest
 }
 
 BackendResult MockBackend::interrogate(const std::string& deviceId, int qualifier) {
-    (void)qualifier;
+    if (!isSupportedInterrogationQualifier(qualifier)) return {.status = 400, .body = "{\"ok\":false,\"error\":\"invalid-qualifier\"}"};
     const auto interrogation = devices_.prepareInterrogate(deviceId);
     if (interrogation.lookupState == DeviceLookupState::Missing) return {.status = 404, .body = "{\"ok\":false,\"error\":\"unknown-device\"}"};
     if (interrogation.lookupState == DeviceLookupState::Reconciling) return {.status = 409, .body = "{\"ok\":false,\"error\":\"device_reconciling\"}"};
@@ -60,7 +60,7 @@ BackendResult MockBackend::interrogate(const std::string& deviceId, int qualifie
     BackendResult result{.status = 200, .body = "{\"ok\":true}"};
     for (const auto& event : devices_.collectMockValueEvents(deviceId)) {
         if (event.tag.deviceDataType.starts_with("C_")) continue;
-        result.events.push_back(valueEvent(event.deviceId, event.tag.ioa, event.tag.tagId, event.tag.deviceDataType, event.value, 0, 0, 20));
+        result.events.push_back(valueEvent(event.deviceId, event.tag.ioa, event.tag.tagId, event.tag.deviceDataType, event.value, 0, 0, qualifier));
     }
     return result;
 }

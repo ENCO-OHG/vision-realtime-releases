@@ -392,8 +392,8 @@ std::string valueEvent(const std::string& deviceId, int ioa, const std::string& 
     else out << "0";
     out << ",\"receivedTimestamp\":" << receivedTimestampMs
         << ",\"timestampSource\":\"" << (sourceTimestampPresent ? "rtu" : "none") << "\""
-        << ",\"timestampValid\":" << (sourceTimestampValid ? "true" : "false")
-		<< ",\"timestampInvalid\":" << (sourceTimestampPresent && !sourceTimestampValid ? "true" : "false")
+        << ",\"timestampValid\":" << (hasValidSourceTimestamp ? "true" : "false")
+		<< ",\"timestampInvalid\":" << (sourceTimestampPresent && !hasValidSourceTimestamp ? "true" : "false")
         << ",\"timestampSubstituted\":" << (sourceTimestampSubstituted ? "true" : "false")
         << ",\"timestampSummerTime\":" << (sourceTimestampSummerTime ? "true" : "false") << "}";
     return out.str();
